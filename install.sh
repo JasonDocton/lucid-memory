@@ -171,7 +171,7 @@ add_to_mcp_config() {
 
     # If jq is available, use it (safest)
     if command -v jq &> /dev/null; then
-        jq --arg cmd "$server_path" '.mcpServers["lucid-memory"] = {"command": $cmd, "args": []}' \
+        jq --arg cmd "$server_path" '.mcpServers["lucid-memory"] = {"type": "stdio", "command": $cmd, "args": []}' \
             "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
         return 0
     fi
@@ -184,7 +184,7 @@ with open('$config_file', 'r') as f:
     config = json.load(f)
 if 'mcpServers' not in config:
     config['mcpServers'] = {}
-config['mcpServers']['lucid-memory'] = {'command': '$server_path', 'args': []}
+config['mcpServers']['lucid-memory'] = {'type': 'stdio', 'command': '$server_path', 'args': []}
 with open('$config_file', 'w') as f:
     json.dump(config, f, indent=2)
 EOF
@@ -196,7 +196,7 @@ EOF
         warn "Cannot safely modify existing MCP config without jq or python"
         echo ""
         echo "Please manually add this to $config_file in the mcpServers section:"
-        echo -e "${BOLD}  \"lucid-memory\": { \"command\": \"$server_path\", \"args\": [] }${NC}"
+        echo -e "${BOLD}  \"lucid-memory\": { \"type\": \"stdio\", \"command\": \"$server_path\", \"args\": [] }${NC}"
         echo ""
         if [ "$INTERACTIVE" = true ]; then
             read -p "Press Enter after you've added it (or Ctrl+C to abort)..."
@@ -207,6 +207,7 @@ EOF
 {
   "mcpServers": {
     "lucid-memory": {
+      "type": "stdio",
       "command": "$server_path",
       "args": []
     }
@@ -380,7 +381,8 @@ fi
 success "Claude Code found"
 
 # Check existing MCP config
-MCP_CONFIG="$CLAUDE_SETTINGS_DIR/claude_desktop_config.json"
+# Claude Code uses ~/.claude.json for MCP servers (not claude_desktop_config.json which is for Claude Desktop app)
+MCP_CONFIG="$HOME/.claude.json"
 if [ -f "$MCP_CONFIG" ]; then
     if ! validate_json "$MCP_CONFIG"; then
         fail "Existing MCP config is malformed" \
@@ -575,11 +577,11 @@ if [ -f "$MCP_CONFIG" ]; then
     add_to_mcp_config "$MCP_CONFIG" "$LUCID_BIN/lucid-server"
 else
     # Create new config
-    mkdir -p "$(dirname "$MCP_CONFIG")"
     cat > "$MCP_CONFIG" << EOF
 {
   "mcpServers": {
     "lucid-memory": {
+      "type": "stdio",
       "command": "$LUCID_BIN/lucid-server",
       "args": []
     }
@@ -641,12 +643,27 @@ show_progress  # Step 7: Restart Claude Code
 # === Done! ===
 
 echo ""
-echo -e "  ${GREEN}✓${NC} ${BOLD}Lucid Memory installed successfully!${NC}"
+echo -e "${C1}  ██╗     ██╗   ██╗ ██████╗██╗██████╗ ${NC}"
+echo -e "${C2}  ██║     ██║   ██║██╔════╝██║██╔══██╗${NC}"
+echo -e "${C3}  ██║     ██║   ██║██║     ██║██║  ██║${NC}"
+echo -e "${C4}  ██║     ██║   ██║██║     ██║██║  ██║${NC}"
+echo -e "${C5}  ███████╗╚██████╔╝╚██████╗██║██████╔╝${NC}"
+echo -e "${C6}  ╚══════╝ ╚═════╝  ╚═════╝╚═╝╚═════╝ ${NC}"
+echo -e "          ${C3}M ${C4}E ${C5}M ${C6}O ${C5}R ${C4}Y${NC}"
 echo ""
-echo -e "  Claude Code is restarting with Lucid Memory enabled."
-echo -e "  Just use Claude normally - your memories build automatically."
+echo -e "       ${GREEN}✓${NC} ${BOLD}Installed Successfully!${NC}"
+echo ""
+echo -e "  Just use Claude Code normally - your memories"
+echo -e "  build automatically over time."
 echo ""
 echo -e "  ${DIM}Troubleshooting:${NC}"
 echo -e "  ${C4}lucid status${NC}  - Check if everything is working"
 echo -e "  ${C4}lucid stats${NC}   - View memory statistics"
+echo ""
+echo -e "  ${DIM}To uninstall:${NC}"
+echo -e "  ${C4}curl -fsSL lucidmemory.dev/uninstall | bash${NC}"
+echo ""
+echo -e "${DIM}  ─────────────────────────────────────────${NC}"
+echo ""
+echo -e "  ${YELLOW}Note:${NC} Please restart your terminal to use the 'lucid' command."
 echo ""

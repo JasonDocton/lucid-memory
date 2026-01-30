@@ -120,8 +120,8 @@ if (-not (Test-Path $ClaudeSettingsDir)) {
 }
 Write-Success "Claude Code found"
 
-# Check existing MCP config
-$McpConfig = "$ClaudeSettingsDir\claude_desktop_config.json"
+# Check existing MCP config (Claude Code uses ~/.claude.json, not claude_desktop_config.json)
+$McpConfig = "$env:USERPROFILE\.claude.json"
 if (Test-Path $McpConfig) {
     try {
         $null = Get-Content $McpConfig | ConvertFrom-Json
@@ -318,16 +318,17 @@ if (Test-Path $McpConfig) {
         $Config | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue @{}
     }
     $Config.mcpServers | Add-Member -NotePropertyName "lucid-memory" -NotePropertyValue @{
+        type = "stdio"
         command = $ServerPath
         args = @()
     } -Force
     $Config | ConvertTo-Json -Depth 10 | Out-File -FilePath $McpConfig -Encoding UTF8
 } else {
     # Create new config
-    New-Item -ItemType Directory -Force -Path (Split-Path $McpConfig) | Out-Null
     @{
         mcpServers = @{
             "lucid-memory" = @{
+                type = "stdio"
                 command = $ServerPath
                 args = @()
             }
@@ -403,19 +404,40 @@ Show-Progress  # Step 7: Restart Claude Code
 # === Done! ===
 
 $e = [char]27
+$C1 = "$e[38;5;99m"
+$C2 = "$e[38;5;105m"
+$C3 = "$e[38;5;111m"
 $C4 = "$e[38;5;117m"
+$C5 = "$e[38;5;123m"
+$C6 = "$e[38;5;159m"
 $NC = "$e[0m"
 $DIM = "$e[2m"
 $GREEN = "$e[0;32m"
+$YELLOW = "$e[1;33m"
 $BOLD = "$e[1m"
 
 Write-Host ""
-Write-Host "  ${GREEN}✓${NC} ${BOLD}Lucid Memory installed successfully!${NC}"
+Write-Host "${C1}  ██╗     ██╗   ██╗ ██████╗██╗██████╗ ${NC}"
+Write-Host "${C2}  ██║     ██║   ██║██╔════╝██║██╔══██╗${NC}"
+Write-Host "${C3}  ██║     ██║   ██║██║     ██║██║  ██║${NC}"
+Write-Host "${C4}  ██║     ██║   ██║██║     ██║██║  ██║${NC}"
+Write-Host "${C5}  ███████╗╚██████╔╝╚██████╗██║██████╔╝${NC}"
+Write-Host "${C6}  ╚══════╝ ╚═════╝  ╚═════╝╚═╝╚═════╝ ${NC}"
+Write-Host "          ${C3}M ${C4}E ${C5}M ${C6}O ${C5}R ${C4}Y${NC}"
 Write-Host ""
-Write-Host "  Claude Code is restarting with Lucid Memory enabled."
-Write-Host "  Just use Claude normally - your memories build automatically."
+Write-Host "       ${GREEN}✓${NC} ${BOLD}Installed Successfully!${NC}"
+Write-Host ""
+Write-Host "  Just use Claude Code normally - your memories"
+Write-Host "  build automatically over time."
 Write-Host ""
 Write-Host "  ${DIM}Troubleshooting:${NC}"
 Write-Host "  ${C4}lucid status${NC}  - Check if everything is working"
 Write-Host "  ${C4}lucid stats${NC}   - View memory statistics"
+Write-Host ""
+Write-Host "  ${DIM}To uninstall:${NC}"
+Write-Host "  ${C4}irm lucidmemory.dev/uninstall.ps1 | iex${NC}"
+Write-Host ""
+Write-Host "${DIM}  ─────────────────────────────────────────${NC}"
+Write-Host ""
+Write-Host "  ${YELLOW}Note:${NC} Please restart your terminal to use the 'lucid' command."
 Write-Host ""
