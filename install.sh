@@ -17,9 +17,10 @@
 
 set -e
 
-# Detect if we're running interactively
+# Detect if we're running interactively (stdin is a terminal)
+# When piped via curl | bash, stdin is NOT a terminal, so we use defaults
 INTERACTIVE=false
-if [ -t 0 ] || { [ -e /dev/tty ] && [ -r /dev/tty ]; }; then
+if [ -t 0 ]; then
     INTERACTIVE=true
 fi
 
@@ -198,7 +199,7 @@ EOF
         echo -e "${BOLD}  \"lucid-memory\": { \"command\": \"$server_path\", \"args\": [] }${NC}"
         echo ""
         if [ "$INTERACTIVE" = true ]; then
-            read -p "Press Enter after you've added it (or Ctrl+C to abort)..." < /dev/tty 2>/dev/null || true
+            read -p "Press Enter after you've added it (or Ctrl+C to abort)..."
         fi
     else
         # No mcpServers key, we can write fresh
@@ -463,12 +464,11 @@ echo "  [1] Local (Ollama) - Free, private, runs on your machine (recommended)"
 echo "  [2] OpenAI API - Faster, requires API key (\$0.0001/query)"
 echo ""
 
-# Check if we can read interactively
 if [ "$INTERACTIVE" = true ]; then
-    read -p "Choice [1]: " EMBED_CHOICE < /dev/tty 2>/dev/null || EMBED_CHOICE=""
+    read -p "Choice [1]: " EMBED_CHOICE
     EMBED_CHOICE=${EMBED_CHOICE:-1}
 else
-    echo "Non-interactive mode detected, defaulting to Ollama..."
+    echo "Non-interactive mode, defaulting to Ollama..."
     EMBED_CHOICE=1
 fi
 
@@ -476,7 +476,7 @@ case $EMBED_CHOICE in
     2)
         echo ""
         if [ "$INTERACTIVE" = true ]; then
-            read -p "Enter OpenAI API key: " OPENAI_KEY < /dev/tty 2>/dev/null || OPENAI_KEY=""
+            read -p "Enter OpenAI API key: " OPENAI_KEY
         fi
         if [ -z "$OPENAI_KEY" ]; then
             fail "OpenAI API key is required" \
@@ -501,7 +501,7 @@ case $EMBED_CHOICE in
                     echo "Homebrew is required to install Ollama on macOS."
 
                     if [ "$INTERACTIVE" = true ]; then
-                        read -p "Install Homebrew now? [Y/n]: " INSTALL_BREW < /dev/tty 2>/dev/null || INSTALL_BREW="Y"
+                        read -p "Install Homebrew now? [Y/n]: " INSTALL_BREW
                         INSTALL_BREW=${INSTALL_BREW:-Y}
                     else
                         echo "Non-interactive mode, auto-installing Homebrew..."
