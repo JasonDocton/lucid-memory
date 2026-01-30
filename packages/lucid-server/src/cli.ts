@@ -51,11 +51,37 @@ async function main() {
       }
 
       // Output context in a format suitable for injection
-      console.log("<lucid-context>");
-      console.log(context.summary);
+      // IMPORTANT: Use gists when available, truncate content, and limit total output
+      // to avoid blowing up context windows (see: github.com/JasonDocton/lucid-memory/issues/X)
+      const MAX_TOTAL_CHARS = 800;
+      const MAX_MEMORY_CHARS = 100;
+
+      let output = "";
+      output += `## Relevant Memories\n`;
+      output += `${context.summary}\n\n`;
+
+      let charCount = output.length;
+
       for (const candidate of context.memories) {
-        console.log(`- [${candidate.memory.type}] ${candidate.memory.content.slice(0, 200)}`);
+        // Prefer gist over content
+        const text = candidate.memory.gist || candidate.memory.content;
+        const truncated = text.length > MAX_MEMORY_CHARS
+          ? text.slice(0, MAX_MEMORY_CHARS) + "..."
+          : text;
+        const line = `- [${candidate.memory.type}] ${truncated}\n`;
+
+        // Stop if we'd exceed the limit
+        if (charCount + line.length > MAX_TOTAL_CHARS) {
+          break;
+        }
+
+        output += line;
+        charCount += line.length;
       }
+
+      // Wrap in XML tags for Claude to recognize
+      console.log("<lucid-context>");
+      console.log(output.trim());
       console.log("</lucid-context>");
       break;
     }

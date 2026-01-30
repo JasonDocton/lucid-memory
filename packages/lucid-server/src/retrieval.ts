@@ -14,6 +14,7 @@
 
 import { LucidStorage, type Memory, type Association, type StorageConfig } from "./storage.js";
 import { EmbeddingClient, cosineSimilarity, type EmbeddingConfig } from "./embeddings.js";
+import { generateGist, estimateTokens } from "./gist.js";
 
 export interface RetrievalCandidate {
   memory: Memory;
@@ -192,7 +193,7 @@ export class LucidRetrieval {
   }
 
   /**
-   * Store a memory with automatic embedding.
+   * Store a memory with automatic embedding and gist generation.
    */
   async store(
     content: string,
@@ -204,11 +205,14 @@ export class LucidRetrieval {
       tags?: string[];
     } = {}
   ): Promise<Memory> {
+    // Generate gist if not provided
+    const gist = options.gist ?? generateGist(content, 150);
+
     // Store the memory
     const memory = this.storage.storeMemory({
       content,
       type: options.type ?? "learning",
-      gist: options.gist,
+      gist,
       emotionalWeight: options.emotionalWeight ?? 0.5,
       projectId: options.projectId,
       tags: options.tags
@@ -230,23 +234,65 @@ export class LucidRetrieval {
 
   /**
    * Get context relevant to a query (higher-level retrieval for hooks).
+   *
+   * Token budgeting:
+   * - Default budget: 300 tokens (~1200 chars)
+   * - Only includes memories with similarity > minSimilarity
+   * - Uses gists when available, falls back to truncated content
    */
   async getContext(
     currentTask: string,
-    projectId?: string
+    projectId?: string,
+    options: {
+      tokenBudget?: number;
+      minSimilarity?: number;
+    } = {}
   ): Promise<{
     memories: RetrievalCandidate[];
     summary: string;
+    tokensUsed: number;
   }> {
-    const candidates = await this.retrieve(currentTask, { maxResults: 5 }, projectId);
+    const tokenBudget = options.tokenBudget ?? 300;
+    const minSimilarity = options.minSimilarity ?? 0.3;
 
-    // Generate a brief summary
-    const summary =
-      candidates.length > 0
-        ? `Found ${candidates.length} relevant memories. Top match: "${candidates[0].memory.content.slice(0, 100)}..."`
-        : "No relevant memories found.";
+    // Retrieve more than we need, then filter and budget
+    const candidates = await this.retrieve(currentTask, { maxResults: 10 }, projectId);
 
-    return { memories: candidates, summary };
+    // Filter by similarity threshold - weak matches get nothing
+    const relevant = candidates.filter(c => c.similarity >= minSimilarity);
+
+    if (relevant.length === 0) {
+      return {
+        memories: [],
+        summary: "",
+        tokensUsed: 0
+      };
+    }
+
+    // Budget allocation: fit as many memories as possible
+    const selected: RetrievalCandidate[] = [];
+    let tokensUsed = 0;
+
+    for (const candidate of relevant) {
+      // Use gist if available, otherwise generate one on the fly
+      const text = candidate.memory.gist ?? generateGist(candidate.memory.content, 150);
+      const tokens = estimateTokens(text);
+
+      if (tokensUsed + tokens <= tokenBudget) {
+        selected.push(candidate);
+        tokensUsed += tokens;
+      } else {
+        // Budget exhausted
+        break;
+      }
+    }
+
+    // Generate summary only if we have results
+    const summary = selected.length > 0
+      ? `Relevant context (${selected.length} memories, ~${tokensUsed} tokens):`
+      : "";
+
+    return { memories: selected, summary, tokensUsed };
   }
 
   /**
