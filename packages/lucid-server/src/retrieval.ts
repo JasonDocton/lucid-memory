@@ -101,6 +101,7 @@ export const DEFAULT_CONFIG: RetrievalConfig = {
 export class LucidRetrieval {
   public readonly storage: LucidStorage;
   private embedder: EmbeddingClient | null = null;
+  private warnedNoEmbeddings = false;
 
   constructor(storageConfig?: StorageConfig) {
     this.storage = new LucidStorage(storageConfig);
@@ -143,6 +144,10 @@ export class LucidRetrieval {
 
     // If no embedder, fall back to recency-based ranking
     if (!this.embedder) {
+      if (!this.warnedNoEmbeddings) {
+        console.error("[lucid] ⚠️  No embeddings available - results based on recency only, not semantic relevance");
+        this.warnedNoEmbeddings = true;
+      }
       const now = Date.now();
       const candidates: RetrievalCandidate[] = filteredMemories.map((memory, _i) => {
         const history = accessHistories[memories.indexOf(memory)];

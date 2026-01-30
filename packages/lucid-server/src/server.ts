@@ -23,28 +23,45 @@ import { detectProvider } from "./embeddings.js";
 
 // === Initialize ===
 const retrieval = new LucidRetrieval();
+let hasSemanticSearch = false;
 
-// Try to set up embeddings provider
-detectProvider().then(config => {
-  if (config) {
-    retrieval.setEmbeddingConfig(config);
-    console.error(`[lucid] Embedding provider: ${config.provider}`);
-  } else {
-    console.error("[lucid] No embedding provider found. Memories will work without semantic search.");
-  }
-});
-
-// Process any pending embeddings in the background
-setInterval(async () => {
+/**
+ * Initialize embedding provider BEFORE accepting any requests.
+ * This fixes the race condition where queries could run before embeddings are ready.
+ */
+async function initializeEmbeddings(): Promise<void> {
   try {
-    const processed = await retrieval.processPendingEmbeddings(10);
-    if (processed > 0) {
-      console.error(`[lucid] Processed ${processed} pending embeddings`);
+    const config = await detectProvider();
+    if (config) {
+      retrieval.setEmbeddingConfig(config);
+      hasSemanticSearch = true;
+      console.error(`[lucid] Embedding provider: ${config.provider} (${config.model || "default"})`);
+    } else {
+      console.error("[lucid] ⚠️  No embedding provider found - using recency-only retrieval");
+      console.error("[lucid]    Run 'lucid status' to troubleshoot");
     }
   } catch (error) {
-    console.error("[lucid] Error processing embeddings:", error);
+    console.error("[lucid] ⚠️  Failed to initialize embeddings:", error);
+    console.error("[lucid]    Falling back to recency-only retrieval");
   }
-}, 5000);
+}
+
+/**
+ * Process pending embeddings in the background.
+ */
+function startBackgroundEmbeddingProcessor(): void {
+  setInterval(async () => {
+    if (!hasSemanticSearch) return;
+    try {
+      const processed = await retrieval.processPendingEmbeddings(10);
+      if (processed > 0) {
+        console.error(`[lucid] Processed ${processed} pending embeddings`);
+      }
+    } catch (error) {
+      console.error("[lucid] Error processing embeddings:", error);
+    }
+  }, 5000);
+}
 
 // === Create MCP Server ===
 const server = new McpServer({
@@ -330,10 +347,16 @@ server.tool(
 
 // === Start Server ===
 async function main() {
-  const transport = new StdioServerTransport();
-
   console.error("[lucid] Starting Lucid Memory MCP server...");
 
+  // Initialize embeddings BEFORE accepting connections (fixes race condition)
+  await initializeEmbeddings();
+
+  // Start background processor
+  startBackgroundEmbeddingProcessor();
+
+  // Now connect to transport
+  const transport = new StdioServerTransport();
   await server.connect(transport);
 
   console.error("[lucid] Server connected. Ready for Claude Code.");
