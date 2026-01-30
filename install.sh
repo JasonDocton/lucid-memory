@@ -191,7 +191,11 @@ EOF
         echo "Please manually add this to $config_file in the mcpServers section:"
         echo -e "${BOLD}  \"lucid-memory\": { \"command\": \"$server_path\", \"args\": [] }${NC}"
         echo ""
-        read -p "Press Enter after you've added it (or Ctrl+C to abort)..."
+        if [ -t 0 ]; then
+            read -p "Press Enter after you've added it (or Ctrl+C to abort)..."
+        else
+            read -p "Press Enter after you've added it (or Ctrl+C to abort)..." < /dev/tty
+        fi
     else
         # No mcpServers key, we can write fresh
         cat > "$config_file" << EOF
@@ -454,13 +458,23 @@ echo -e "${BOLD}Embedding provider setup:${NC}"
 echo "  [1] Local (Ollama) - Free, private, runs on your machine (recommended)"
 echo "  [2] OpenAI API - Faster, requires API key (\$0.0001/query)"
 echo ""
-read -p "Choice [1]: " EMBED_CHOICE
+
+# Read from terminal even when piped
+if [ -t 0 ]; then
+    read -p "Choice [1]: " EMBED_CHOICE
+else
+    read -p "Choice [1]: " EMBED_CHOICE < /dev/tty || EMBED_CHOICE=""
+fi
 EMBED_CHOICE=${EMBED_CHOICE:-1}
 
 case $EMBED_CHOICE in
     2)
         echo ""
-        read -p "Enter OpenAI API key: " OPENAI_KEY
+        if [ -t 0 ]; then
+            read -p "Enter OpenAI API key: " OPENAI_KEY
+        else
+            read -p "Enter OpenAI API key: " OPENAI_KEY < /dev/tty || OPENAI_KEY=""
+        fi
         if [ -z "$OPENAI_KEY" ]; then
             fail "OpenAI API key is required" \
                 "Please run the installer again and provide a valid API key,\nor choose option 1 for local embeddings."
@@ -475,9 +489,24 @@ case $EMBED_CHOICE in
 
         if ! command -v ollama &> /dev/null; then
             echo "Installing Ollama..."
-            if ! curl -fsSL https://ollama.com/install.sh | sh; then
-                fail "Ollama installation failed" \
-                    "Please install Ollama manually: https://ollama.com\nThen run this installer again."
+
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                # macOS - use Homebrew or prompt for manual install
+                if command -v brew &> /dev/null; then
+                    if ! brew install ollama; then
+                        fail "Ollama installation failed" \
+                            "Please install Ollama manually: https://ollama.com/download\nThen run this installer again."
+                    fi
+                else
+                    fail "Ollama not installed" \
+                        "Please install Ollama manually from: https://ollama.com/download\nOr install Homebrew first: https://brew.sh\nThen run this installer again."
+                fi
+            else
+                # Linux - use official install script
+                if ! curl -fsSL https://ollama.com/install.sh | sh; then
+                    fail "Ollama installation failed" \
+                        "Please install Ollama manually: https://ollama.com\nThen run this installer again."
+                fi
             fi
         fi
         success "Ollama installed"
