@@ -2,6 +2,11 @@
 //!
 //! Provides high-performance memory retrieval via napi-rs.
 
+// napi-rs requires owned types at the FFI boundary - can't use references
+#![allow(clippy::needless_pass_by_value)]
+// Memory indices will never exceed u32::MAX in practice
+#![allow(clippy::cast_possible_truncation)]
+
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
