@@ -38,12 +38,12 @@ Install once. Claude Code remembers forever.
 
 **macOS / Linux:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JasonDocton/lucid-memory/main/install.sh | bash
+curl -fsSL lucidmemory.dev/install | bash
 ```
 
 **Windows (PowerShell as Administrator):**
 ```powershell
-irm https://raw.githubusercontent.com/JasonDocton/lucid-memory/main/install.ps1 | iex
+irm lucidmemory.dev/install.ps1 | iex
 ```
 
 The installer will:

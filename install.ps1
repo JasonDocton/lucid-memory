@@ -1,7 +1,7 @@
 # Lucid Memory Installer for Windows
 #
 # One-liner installation (run in PowerShell as Administrator):
-#   irm https://raw.githubusercontent.com/JasonDocton/lucid-memory/main/install.ps1 | iex
+#   irm lucidmemory.dev/install.ps1 | iex
 #
 # What this does:
 #   1. Checks all prerequisites (git, disk space, etc.)

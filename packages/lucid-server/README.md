@@ -5,7 +5,7 @@
 Install once. Use Claude Code normally. It remembers.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JasonDocton/lucid-memory/main/install.sh | bash
+curl -fsSL lucidmemory.dev/install | bash
 ```
 
 That's it. Restart Claude Code and it just... works.

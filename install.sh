@@ -3,7 +3,7 @@
 # Lucid Memory Installer
 #
 # One-liner installation:
-#   curl -fsSL https://raw.githubusercontent.com/JasonDocton/lucid-memory/main/install.sh | bash
+#   curl -fsSL lucidmemory.dev/install | bash
 #
 # What this does:
 #   1. Checks all prerequisites (git, disk space, etc.)
