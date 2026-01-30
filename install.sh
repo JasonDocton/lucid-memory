@@ -482,17 +482,39 @@ case $EMBED_CHOICE in
 
             if [[ "$OSTYPE" == "darwin"* ]]; then
                 # macOS
-                if command -v brew &> /dev/null; then
-                    brew install ollama
-                else
+                if ! command -v brew &> /dev/null; then
                     echo ""
-                    echo "Homebrew not found. Please install Ollama manually:"
-                    echo "  1. Download from: https://ollama.com/download"
-                    echo "  2. Install the app"
-                    echo "  3. Run this installer again"
-                    echo ""
-                    fail "Ollama installation requires Homebrew or manual install"
+                    echo "Homebrew is required to install Ollama on macOS."
+                    read -p "Install Homebrew now? [Y/n]: " INSTALL_BREW
+                    INSTALL_BREW=${INSTALL_BREW:-Y}
+
+                    if [[ "$INSTALL_BREW" =~ ^[Yy]$ ]]; then
+                        echo "Installing Homebrew..."
+                        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+                        # Add brew to PATH for this session
+                        if [[ -f "/opt/homebrew/bin/brew" ]]; then
+                            eval "$(/opt/homebrew/bin/brew shellenv)"
+                        elif [[ -f "/usr/local/bin/brew" ]]; then
+                            eval "$(/usr/local/bin/brew shellenv)"
+                        fi
+
+                        if ! command -v brew &> /dev/null; then
+                            fail "Homebrew installation failed" \
+                                "Please install manually: https://brew.sh\nThen run this installer again."
+                        fi
+                        success "Homebrew installed"
+                    else
+                        echo ""
+                        echo "Please install Ollama manually:"
+                        echo "  Download from: https://ollama.com/download"
+                        echo ""
+                        fail "Ollama installation requires Homebrew or manual install"
+                    fi
                 fi
+
+                echo "Installing Ollama via Homebrew..."
+                brew install ollama
             else
                 # Linux
                 curl -fsSL https://ollama.com/install.sh | sh
