@@ -86,6 +86,18 @@ jobs:
               --output-dir .
           fi
 
+      - name: Rename output file
+        working-directory: packages/lucid-native
+        shell: bash
+        run: |
+          # Find any .node file and rename to expected name
+          for f in *.node; do
+            if [ -f "$f" ]; then
+              mv "$f" "lucid-native.${{ matrix.name }}.node"
+              break
+            fi
+          done
+
       - name: List built files
         working-directory: packages/lucid-native
         shell: bash
@@ -117,7 +129,10 @@ jobs:
       - name: Copy binaries to package
         run: |
           mkdir -p packages/lucid-native
-          cp artifacts/native-*/*.node packages/lucid-native/
+          # Copy each binary, they should have unique names now
+          for dir in artifacts/native-*; do
+            cp "$dir"/*.node packages/lucid-native/ || true
+          done
           ls -la packages/lucid-native/
 
       - name: Commit binaries
