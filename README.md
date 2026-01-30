@@ -4,6 +4,16 @@
 
 High-performance reconstructive memory retrieval for AI systems, implementing ACT-R spreading activation and MINERVA 2's cognitive architecture.
 
+<p align="center">
+  <br>
+  <code>curl -fsSL lucidmemory.dev/install | bash</code>
+  <br><br>
+  <sub>Works with Claude Code · macOS & Linux · <a href="#windows">Windows instructions</a></sub>
+  <br><br>
+</p>
+
+---
+
 ## Why Reconstructive Memory?
 
 Most AI memory systems treat memory as storage and retrieval—like a database. You store facts, you query facts, you get facts back.
@@ -41,7 +51,8 @@ Install once. Claude Code remembers forever.
 curl -fsSL lucidmemory.dev/install | bash
 ```
 
-**Windows (PowerShell as Administrator):**
+<h4 id="windows">Windows (PowerShell as Administrator):</h4>
+
 ```powershell
 irm lucidmemory.dev/install.ps1 | iex
 ```
