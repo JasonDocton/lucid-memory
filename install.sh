@@ -598,16 +598,119 @@ show_progress  # Step 5: Configure Claude Code
 echo ""
 echo "Installing memory hooks..."
 
-HOOKS_DIR="$CLAUDE_SETTINGS_DIR/hooks"
-mkdir -p "$HOOKS_DIR"
+# Copy hook script to lucid directory
+LUCID_HOOKS_DIR="$LUCID_DIR/hooks"
+mkdir -p "$LUCID_HOOKS_DIR"
 
-# Copy hook script
 if [ -f "$LUCID_DIR/server/hooks/user-prompt-submit.sh" ]; then
-    cp "$LUCID_DIR/server/hooks/user-prompt-submit.sh" "$HOOKS_DIR/UserPromptSubmit.sh"
-    chmod +x "$HOOKS_DIR/UserPromptSubmit.sh"
-    success "Hooks installed"
+    cp "$LUCID_DIR/server/hooks/user-prompt-submit.sh" "$LUCID_HOOKS_DIR/user-prompt-submit.sh"
+    chmod +x "$LUCID_HOOKS_DIR/user-prompt-submit.sh"
+    success "Hook script installed"
 else
     warn "Hook script not found - automatic context injection disabled"
+fi
+
+# Configure hook in Claude Code settings
+CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
+HOOK_COMMAND="$LUCID_HOOKS_DIR/user-prompt-submit.sh"
+
+configure_hook() {
+    local settings_file="$1"
+    local hook_cmd="$2"
+
+    # If jq is available, use it
+    if command -v jq &> /dev/null; then
+        if [ -f "$settings_file" ]; then
+            # Add hook to existing settings
+            jq --arg cmd "$hook_cmd" '
+                .hooks.UserPromptSubmit = [
+                    {
+                        "hooks": [
+                            {"type": "command", "command": $cmd}
+                        ]
+                    }
+                ]
+            ' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
+        else
+            # Create new settings file
+            jq -n --arg cmd "$hook_cmd" '
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [
+                            {
+                                "hooks": [
+                                    {"type": "command", "command": $cmd}
+                                ]
+                            }
+                        ]
+                    }
+                }
+            ' > "$settings_file"
+        fi
+        return 0
+    fi
+
+    # If python is available, use it
+    if command -v python3 &> /dev/null; then
+        python3 << EOF
+import json
+import os
+
+settings_file = '$settings_file'
+hook_cmd = '$hook_cmd'
+
+if os.path.exists(settings_file):
+    with open(settings_file, 'r') as f:
+        config = json.load(f)
+else:
+    config = {}
+
+if 'hooks' not in config:
+    config['hooks'] = {}
+
+config['hooks']['UserPromptSubmit'] = [
+    {
+        'hooks': [
+            {'type': 'command', 'command': hook_cmd}
+        ]
+    }
+]
+
+with open(settings_file, 'w') as f:
+    json.dump(config, f, indent=2)
+EOF
+        return 0
+    fi
+
+    # Fallback: create minimal settings file
+    if [ ! -f "$settings_file" ]; then
+        cat > "$settings_file" << EOF
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {"type": "command", "command": "$hook_cmd"}
+        ]
+      }
+    ]
+  }
+}
+EOF
+        return 0
+    fi
+
+    warn "Cannot safely modify settings.json without jq or python"
+    echo ""
+    echo "Please manually add this to $settings_file:"
+    echo -e "${BOLD}\"hooks\": { \"UserPromptSubmit\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"$hook_cmd\" }] }] }${NC}"
+    return 1
+}
+
+if configure_hook "$CLAUDE_SETTINGS" "$HOOK_COMMAND"; then
+    success "Hook configured in settings.json"
+else
+    warn "Hook configuration requires manual setup"
 fi
 
 # === Add to PATH ===

@@ -132,11 +132,40 @@ fi
 
 # === Remove Hooks ===
 
-HOOKS_DIR="$CLAUDE_SETTINGS_DIR/hooks"
-if [ -f "$HOOKS_DIR/UserPromptSubmit.sh" ]; then
-    info "Removing hooks..."
-    rm -f "$HOOKS_DIR/UserPromptSubmit.sh"
-    success "Hooks removed"
+info "Removing hook configuration..."
+
+# Remove hook config from settings.json
+CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
+if [ -f "$CLAUDE_SETTINGS" ]; then
+    if command -v jq &> /dev/null; then
+        jq 'del(.hooks.UserPromptSubmit)' "$CLAUDE_SETTINGS" > "$CLAUDE_SETTINGS.tmp" && mv "$CLAUDE_SETTINGS.tmp" "$CLAUDE_SETTINGS"
+        success "Hook config removed from settings.json"
+    elif command -v python3 &> /dev/null; then
+        python3 << 'PYTHON_SCRIPT'
+import json
+import os
+
+settings_path = os.path.expanduser("~/.claude/settings.json")
+try:
+    with open(settings_path, 'r') as f:
+        config = json.load(f)
+    if 'hooks' in config and 'UserPromptSubmit' in config['hooks']:
+        del config['hooks']['UserPromptSubmit']
+        with open(settings_path, 'w') as f:
+            json.dump(config, f, indent=2)
+except Exception:
+    pass
+PYTHON_SCRIPT
+        success "Hook config removed from settings.json"
+    else
+        warn "Could not remove hook config - please remove 'UserPromptSubmit' from $CLAUDE_SETTINGS manually"
+    fi
+fi
+
+# Remove old hook file location (legacy)
+OLD_HOOKS_DIR="$CLAUDE_SETTINGS_DIR/hooks"
+if [ -f "$OLD_HOOKS_DIR/UserPromptSubmit.sh" ]; then
+    rm -f "$OLD_HOOKS_DIR/UserPromptSubmit.sh"
 fi
 
 # === Remove PATH Entry ===

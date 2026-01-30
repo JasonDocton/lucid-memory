@@ -91,12 +91,27 @@ if (Test-Path $McpConfig) {
 
 # === Remove Hooks ===
 
-$HooksDir = "$ClaudeSettingsDir\hooks"
-$HookFile = "$HooksDir\UserPromptSubmit.ps1"
-if (Test-Path $HookFile) {
-    Write-Info "Removing hooks..."
-    Remove-Item -Force $HookFile
-    Write-Success "Hooks removed"
+# Remove hook configuration from settings.json
+$ClaudeSettings = "$ClaudeSettingsDir\settings.json"
+if (Test-Path $ClaudeSettings) {
+    Write-Info "Removing hook configuration..."
+    try {
+        $Config = Get-Content $ClaudeSettings | ConvertFrom-Json
+        if ($Config.hooks -and $Config.hooks.UserPromptSubmit) {
+            $Config.hooks.PSObject.Properties.Remove('UserPromptSubmit')
+            $Config | ConvertTo-Json -Depth 10 | Out-File -FilePath $ClaudeSettings -Encoding UTF8
+        }
+        Write-Success "Hook config removed from settings.json"
+    } catch {
+        Write-Warn "Could not remove hook config - please edit $ClaudeSettings manually"
+    }
+}
+
+# Remove old hook file location (legacy)
+$OldHooksDir = "$ClaudeSettingsDir\hooks"
+$OldHookFile = "$OldHooksDir\UserPromptSubmit.ps1"
+if (Test-Path $OldHookFile) {
+    Remove-Item -Force $OldHookFile
 }
 
 # === Remove PATH Entry ===

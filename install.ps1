@@ -344,15 +344,15 @@ Show-Progress  # Step 5: Configure Claude Code
 Write-Host ""
 Write-Host "Installing memory hooks..."
 
-$HooksDir = "$ClaudeSettingsDir\hooks"
-New-Item -ItemType Directory -Force -Path $HooksDir | Out-Null
+# Create hooks directory in lucid folder
+$LucidHooksDir = "$LucidDir\hooks"
+New-Item -ItemType Directory -Force -Path $LucidHooksDir | Out-Null
 
-# Copy hook script (convert to PowerShell version)
-$HookSource = "$LucidDir\server\hooks\user-prompt-submit.sh"
-if (Test-Path $HookSource) {
-    # Create a PowerShell version of the hook
-    @"
+# Create PowerShell version of the hook
+$HookScript = @"
 # Lucid Memory - UserPromptSubmit Hook
+# Stores user messages and retrieves relevant context
+
 `$UserPrompt = `$input | Out-String
 if (`$UserPrompt.Length -lt 5) { exit 0 }
 
@@ -360,12 +360,49 @@ if (`$UserPrompt.Length -lt 5) { exit 0 }
 `$ProjectPath = if (`$env:CLAUDE_PROJECT_PATH) { `$env:CLAUDE_PROJECT_PATH } else { Get-Location }
 
 if (Test-Path `$LucidCli) {
+    # Store the user message (background job)
+    Start-Job -ScriptBlock {
+        param(`$cli, `$prompt, `$project)
+        & `$cli store `$prompt --type=conversation --project=`$project 2>`$null
+    } -ArgumentList `$LucidCli, `$UserPrompt, `$ProjectPath | Out-Null
+
+    # Retrieve relevant context (outputs to stdout)
     & `$LucidCli context `$UserPrompt --project=`$ProjectPath 2>`$null
 }
-"@ | Out-File -FilePath "$HooksDir\UserPromptSubmit.ps1" -Encoding UTF8
-    Write-Success "Hooks installed"
-} else {
-    Write-Warn "Hook script not found - automatic context injection disabled"
+"@
+$HookScript | Out-File -FilePath "$LucidHooksDir\user-prompt-submit.ps1" -Encoding UTF8
+Write-Success "Hook script installed"
+
+# Configure hook in Claude Code settings.json
+$ClaudeSettings = "$ClaudeSettingsDir\settings.json"
+$HookCommand = "$LucidHooksDir\user-prompt-submit.ps1"
+
+try {
+    if (Test-Path $ClaudeSettings) {
+        $Config = Get-Content $ClaudeSettings | ConvertFrom-Json
+    } else {
+        $Config = @{}
+    }
+
+    if (-not $Config.hooks) {
+        $Config | Add-Member -NotePropertyName "hooks" -NotePropertyValue @{} -Force
+    }
+
+    $Config.hooks | Add-Member -NotePropertyName "UserPromptSubmit" -NotePropertyValue @(
+        @{
+            hooks = @(
+                @{
+                    type = "command"
+                    command = "powershell -ExecutionPolicy Bypass -File `"$HookCommand`""
+                }
+            )
+        }
+    ) -Force
+
+    $Config | ConvertTo-Json -Depth 10 | Out-File -FilePath $ClaudeSettings -Encoding UTF8
+    Write-Success "Hook configured in settings.json"
+} catch {
+    Write-Warn "Could not configure hook in settings.json - manual setup may be needed"
 }
 
 # === Add to PATH ===
