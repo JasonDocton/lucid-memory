@@ -1,0 +1,127 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.3.11/schema.json",
+  "vcs": {
+    "enabled": false,
+    "clientKind": "git",
+    "useIgnoreFile": false
+  },
+  "files": {
+    "ignoreUnknown": false,
+    "includes": [
+      "**",
+      "!**/src/routeTree.gen.ts",
+      "!**/convex/_generated",
+      "!**/node_modules",
+      "!**/.claude",
+      "!**/build",
+      "!**/dist"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "formatWithErrors": true,
+    "indentStyle": "tab",
+    "indentWidth": 2,
+    "lineEnding": "lf",
+    "lineWidth": 80,
+    "attributePosition": "auto",
+    "bracketSameLine": false,
+    "bracketSpacing": true,
+    "expand": "auto"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "correctness": {
+        "noNestedComponentDefinitions": "warn",
+        "noUndeclaredDependencies": "error",
+        "noUnusedImports": "off",
+        "useImportExtensions": "on",
+        "useJsxKeyInIterable": "error"
+      },
+      "performance": {
+        "noNamespaceImport": "error",
+        "noReExportAll": "error",
+        "useTopLevelRegex": "warn"
+      },
+      "nursery": {
+        "useSortedClasses": {
+          "level": "on",
+          "fix": "safe",
+          "options": {
+            "functions": ["cva", "cn", "cx"]
+          }
+        },
+        "noFloatingPromises": "error"
+      },
+      "style": {
+        "noCommonJs": "error",
+        "noInferrableTypes": "error",
+        "noDefaultExport": "error",
+        "noNamespace": "error",
+        "noProcessEnv": "error",
+        "useAsConstAssertion": "error"
+      },
+      "suspicious": {
+        "noEvolvingTypes": "warn",
+        "noUnassignedVariables": "on",
+        "noVar": "on",
+        "useAwait": "error",
+        "useErrorMessage": "warn"
+      }
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on",
+        "useSortedAttributes": "on"
+      }
+    }
+  },
+  "css": {
+    "formatter": {
+      "enabled": true
+    },
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteProperties": "asNeeded",
+      "trailingCommas": "es5",
+      "semicolons": "asNeeded",
+      "arrowParentheses": "always",
+      "bracketSameLine": false,
+      "attributePosition": "auto",
+      "bracketSpacing": true
+    },
+    "globals": ["React"]
+  },
+  "json": {
+    "parser": {
+      "allowTrailingCommas": true
+    },
+    "formatter": {
+      "trailingCommas": "none"
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["convex/**/*.ts"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "useImportExtensions": "off"
+          },
+          "style": {
+            "noDefaultExport": "off"
+          }
+        }
+      }
+    }
+  ]
+}

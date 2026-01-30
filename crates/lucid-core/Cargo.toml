@@ -1,0 +1,30 @@
+[package]
+name = "lucid-core"
+description = "Reconstructive memory retrieval engine using ACT-R spreading activation"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+keywords = ["memory", "retrieval", "act-r", "spreading-activation", "ai"]
+categories = ["science", "algorithms"]
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+rand = { workspace = true }
+
+[[bench]]
+name = "retrieval"
+harness = false
+
+[[bench]]
+name = "activation"
+harness = false
+
+[lints]
+workspace = true

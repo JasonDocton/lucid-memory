@@ -1,0 +1,60 @@
+# Clippy Linter Configuration
+# Equivalent to Biome linter settings
+# Requires: rustup component add clippy
+
+# Cognitive complexity threshold (default 25, stricter = lower)
+cognitive-complexity-threshold = 15
+
+# Too many arguments threshold
+too-many-arguments-threshold = 7
+
+# Too many lines threshold for functions
+too-many-lines-threshold = 100
+
+# Type complexity threshold
+type-complexity-threshold = 250
+
+# Trivial copy size (bytes) - types larger than this shouldn't be Copy
+trivial-copy-size-limit = 8
+
+# Threshold for large stack arrays
+array-size-threshold = 512000
+
+# Max struct bools before suggesting a state enum
+max-struct-bools = 3
+
+# Enum variant name repetition threshold
+enum-variant-name-threshold = 3
+
+# Struct field name repetition threshold  
+struct-field-name-threshold = 3
+
+# Single char binding names to allow (loop counters etc)
+allowed-idents-below-min-chars = ["i", "j", "k", "n", "x", "y", "z", "id", "tx", "rx", "dt"]
+
+# Minimum identifier length
+min-ident-chars-threshold = 2
+
+# Disallowed names (defaults like "foo", "bar", "baz")
+disallowed-names = ["foo", "bar", "baz", "quux", "temp", "tmp"]
+
+# Doc comment code block ignore list
+doc-valid-idents = ["TypeScript", "JavaScript", "NaN", "MCP", "SIMD", "GPU", "CPU", "API", "APIs", "ID", "IDs", "JSON", "HTML", "CSS", "SQL", "URL", "URLs", "URI", "URIs", "HTTP", "HTTPS", "WebSocket", "GitHub", "GitLab", "OAuth", "UUID", "UUIDs", "WASM", "WebAssembly"]
+
+# Verbose bit mask threshold
+verbose-bit-mask-threshold = 1
+
+# MSRV - minimum supported rust version
+msrv = "1.83"
+
+# Paths to avoid (generated code etc)
+avoid-breaking-exported-api = true
+
+# Future incompatibility
+cargo-ignore-publish = false
+
+# Large error threshold (for result error type size)
+large-error-threshold = 128
+
+# Stack size threshold for moves
+pass-by-value-size-limit = 256

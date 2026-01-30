@@ -1,0 +1,44 @@
+{
+  "lsp": {
+    "biome": {
+      "binary": {
+        "path": "/opt/homebrew/bin/biome",
+        "arguments": ["lsp-proxy"]
+      }
+    },
+    "tailwindcss-language-server": {
+      "settings": {
+        "classFunctions": ["cva", "cx"],
+        "experimental": {
+          "classRegex": ["[cls|className]\\s\\:\\=\\s\"([^\"]*)"]
+        }
+      }
+    }
+  },
+  "languages": {
+    "JavaScript": {
+      "formatter": { "language_server": { "name": "biome" } },
+      "code_actions_on_format": {
+        "source.fixAll.biome": true,
+        "source.organizeImports.biome": true
+      }
+    },
+    "TypeScript": {
+      "inlay_hints": {
+        "enabled": false
+      },
+      "formatter": { "language_server": { "name": "biome" } },
+      "code_actions_on_format": {
+        "source.fixAll.biome": true,
+        "source.organizeImports.biome": true
+      }
+    },
+    "TSX": {
+      "formatter": { "language_server": { "name": "biome" } },
+      "code_actions_on_format": {
+        "source.fixAll.biome": true,
+        "source.organizeImports.biome": true
+      }
+    }
+  }
+}

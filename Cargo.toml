@@ -1,0 +1,95 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/JasonDocton/lucid-memory"
+
+[workspace.dependencies]
+# Math & Computation
+faer = "0.23"
+wide = "0.7"
+nalgebra = "0.33"
+
+# Parallelism & Concurrency
+rayon = "1.10"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+rkyv = { version = "0.8", features = ["validation"] }
+bincode = "1"
+
+# Memory
+bumpalo = { version = "3.17", features = ["collections"] }
+smallvec = "1.13"
+
+# napi-rs
+napi = { version = "3", default-features = false, features = ["napi9", "async", "serde-json"] }
+napi-derive = "3"
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Utilities
+bon = "3.6"
+derive_more = "1"
+
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
+
+# ============================================================================
+# WORKSPACE LINTS (paste from cargo-lints.toml)
+# ============================================================================
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+unused_results = "warn"
+future_incompatible = { level = "deny", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+rust_2021_compatibility = { level = "deny", priority = -1 }
+dead_code = "warn"
+unused_imports = "allow"
+unused_variables = "warn"
+unused_assignments = "warn"
+unused_mut = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+
+# Performance
+redundant_clone = "warn"
+wildcard_imports = "deny"
+
+# Error handling
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
+# Docs (note: missing_docs is a rustc lint, not clippy)
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+missing_safety_doc = "deny"
+
+# Allow overrides
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+similar_names = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"

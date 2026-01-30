@@ -1,0 +1,26 @@
+{
+  "name": "lucid-server",
+  "version": "0.1.0",
+  "description": "MCP server for Lucid Memory - Claude Code that actually remembers",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "lucid-server": "./src/server.ts",
+    "lucid": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run src/server.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  },
+  "keywords": ["mcp", "claude", "memory", "sqlite", "ai"],
+  "license": "MIT"
+}

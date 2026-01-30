@@ -1,0 +1,14 @@
+/Users/jasondocton/Documents/Code Space/rad-mind/target/debug/deps/serde-8279e543b10dfc13.d: /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/jasondocton/Documents/Code\ Space/rad-mind/target/debug/build/serde-7ceb09fb5009e528/out/private.rs
+
+/Users/jasondocton/Documents/Code Space/rad-mind/target/debug/deps/libserde-8279e543b10dfc13.rlib: /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/jasondocton/Documents/Code\ Space/rad-mind/target/debug/build/serde-7ceb09fb5009e528/out/private.rs
+
+/Users/jasondocton/Documents/Code Space/rad-mind/target/debug/deps/libserde-8279e543b10dfc13.rmeta: /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/jasondocton/Documents/Code\ Space/rad-mind/target/debug/build/serde-7ceb09fb5009e528/out/private.rs
+
+/Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/Users/jasondocton/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/Users/jasondocton/Documents/Code\ Space/rad-mind/target/debug/build/serde-7ceb09fb5009e528/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/jasondocton/Documents/Code Space/rad-mind/target/debug/build/serde-7ceb09fb5009e528/out

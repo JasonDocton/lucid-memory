@@ -1,0 +1,59 @@
+# Cargo Configuration
+# Place in project root as .cargo/config.toml
+
+[alias]
+# Lint shortcuts
+l = "clippy --all-targets --all-features"
+lint = "clippy --all-targets --all-features -- -D warnings"
+lint-fix = "clippy --all-targets --all-features --fix --allow-dirty --allow-staged"
+
+# Format shortcuts
+fmt = "fmt --all"
+fmt-check = "fmt --all -- --check"
+
+# Combined check (format + lint)
+check-all = ["fmt --all -- --check", "clippy --all-targets --all-features -- -D warnings"]
+
+# Release build with target CPU optimizations
+release = "build --release"
+release-native = "build --release --config 'build.rustflags = [\"-C\", \"target-cpu=native\"]'"
+
+# Test shortcuts
+t = "test"
+tw = "test --workspace"
+
+# Doc shortcuts
+doc = "doc --no-deps --open"
+
+[build]
+# Faster linking (use mold or lld if available)
+# Uncomment one based on your system:
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]  # Linux with mold
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]   # Linux/Mac with lld
+
+# For release builds (set via release-native alias instead for flexibility)
+# rustflags = ["-C", "target-cpu=native"]
+
+[target.x86_64-unknown-linux-gnu]
+# Linux-specific linker settings
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.aarch64-apple-darwin]
+# macOS Apple Silicon settings
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.x86_64-apple-darwin]
+# macOS Intel settings
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[env]
+# Colored output
+CARGO_TERM_COLOR = "always"
+
+[net]
+# Faster git fetches
+git-fetch-with-cli = true
+
+[registries.crates-io]
+protocol = "sparse"
