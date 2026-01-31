@@ -3,9 +3,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test"
-import { existsSync, unlinkSync } from "fs"
-import { tmpdir } from "os"
-import { join } from "path"
+import { existsSync, unlinkSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { LucidStorage } from "./storage.ts"
 
 const TEST_DB = join(tmpdir(), `lucid-test-${Date.now()}.db`)

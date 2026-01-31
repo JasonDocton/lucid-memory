@@ -1293,7 +1293,7 @@ server.tool(
 )
 
 // === Start Server ===
-async function main() {
+async function main(): Promise<void> {
 	console.error("[lucid] Starting Lucid Memory MCP server...")
 
 	// Initialize embeddings BEFORE accepting connections (fixes race condition)

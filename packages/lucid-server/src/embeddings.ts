@@ -5,9 +5,9 @@
  * Supports Ollama (local, free) and OpenAI (cloud, paid).
  */
 
-import { appendFileSync, existsSync, mkdirSync } from "fs"
-import { homedir } from "os"
-import { join } from "path"
+import { appendFileSync, existsSync, mkdirSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
 
 // Simple file logger for embedding failures
 const LOG_DIR = join(homedir(), ".lucid", "logs")

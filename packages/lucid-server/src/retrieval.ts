@@ -33,11 +33,11 @@ import {
 
 // Try to load native Rust bindings, fall back to TypeScript if not available
 let nativeModule: typeof import("@lucid-memory/native") | null = null
-let useNative = false
+let shouldUseNative = false
 
 try {
 	nativeModule = await import("@lucid-memory/native")
-	useNative = true
+	shouldUseNative = true
 	console.log("[lucid] Using native Rust retrieval engine (100x faster)")
 } catch {
 	console.log("[lucid] Native module not available, using TypeScript fallback")
@@ -110,7 +110,7 @@ export const DEFAULT_CONFIG: RetrievalConfig = {
 export class LucidRetrieval {
 	public readonly storage: LucidStorage
 	private embedder: EmbeddingClient | null = null
-	private warnedNoEmbeddings = false
+	private didWarnNoEmbeddings = false
 
 	constructor(storageConfig?: StorageConfig) {
 		this.storage = new LucidStorage(storageConfig)
@@ -154,22 +154,22 @@ export class LucidRetrieval {
 
 		// If no embedder, fall back to recency-based ranking
 		if (!this.embedder) {
-			if (!this.warnedNoEmbeddings) {
+			if (!this.didWarnNoEmbeddings) {
 				console.error(
 					"[lucid] ⚠️  No embeddings available - results based on recency only, not semantic relevance"
 				)
-				this.warnedNoEmbeddings = true
+				this.didWarnNoEmbeddings = true
 			}
 			const now = Date.now()
 			const candidates: RetrievalCandidate[] = filteredMemories.map(
 				(memory, _i) => {
 					const history = accessHistories[memories.indexOf(memory)]
 					const baseLevel =
-						useNative && nativeModule
+						shouldUseNative && nativeModule
 							? nativeModule.computeBaseLevel(history, now, config.decay)
 							: computeBaseLevelTS(history, now, config.decay)
 					const probability =
-						useNative && nativeModule
+						shouldUseNative && nativeModule
 							? nativeModule.retrievalProbability(
 									baseLevel,
 									config.threshold,
@@ -231,7 +231,7 @@ export class LucidRetrieval {
 		}
 
 		// Use native Rust retrieval if available
-		if (useNative && nativeModule) {
+		if (shouldUseNative && nativeModule) {
 			return this.retrieveNative(
 				probeVector,
 				memoriesWithEmbeddings,

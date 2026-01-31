@@ -118,7 +118,7 @@ async function main() {
 			const stats = retrieval.storage.getStats()
 			const hasEmbeddings = embeddingConfig !== null
 			let ollamaStatus = "not configured"
-			let ollamaHealthy = false
+			let isOllamaHealthy = false
 			let embeddingTestResult = "skipped"
 
 			console.log("🧠 Lucid Memory Status")
@@ -135,7 +135,7 @@ async function main() {
 					})
 					if (response.ok) {
 						ollamaStatus = "running"
-						ollamaHealthy = true
+						isOllamaHealthy = true
 
 						// Test actual embedding generation
 						try {
@@ -201,7 +201,7 @@ async function main() {
 			// Overall health
 			const healthy =
 				hasEmbeddings &&
-				(ollamaHealthy || embeddingConfig?.provider === "openai")
+				(isOllamaHealthy || embeddingConfig?.provider === "openai")
 			if (healthy) {
 				console.log("Overall: ✓ Healthy")
 			} else {
@@ -210,7 +210,7 @@ async function main() {
 				console.log("Troubleshooting:")
 				if (!hasEmbeddings) {
 					console.log("  - No embedding provider found. Re-run the installer.")
-				} else if (embeddingConfig?.provider === "ollama" && !ollamaHealthy) {
+				} else if (embeddingConfig?.provider === "ollama" && !isOllamaHealthy) {
 					console.log("  - Ollama is not running. Start it with: ollama serve")
 					console.log(
 						"  - Or check if the model is installed: ollama pull nomic-embed-text"
