@@ -12,6 +12,7 @@ categories = ["science", "algorithms"]
 
 [dependencies]
 serde = { workspace = true }
+smallvec = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

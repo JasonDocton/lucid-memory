@@ -27,6 +27,7 @@
 //! - Shared task context creates strong links; temporal proximity creates weaker links
 
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 // ============================================================================
 // Types
@@ -509,13 +510,15 @@ pub fn spread_location_activation(
 }
 
 /// Find locations most strongly associated with a given location.
+///
+/// Uses `SmallVec` to avoid heap allocation when results fit in 16 elements.
 #[must_use]
 pub fn get_associated_locations(
 	location_id: u32,
 	associations: &[LocationAssociation],
 	limit: usize,
-) -> Vec<(u32, f64)> {
-	let mut results: Vec<_> = associations
+) -> SmallVec<[(u32, f64); 16]> {
+	let mut results: SmallVec<[(u32, f64); 16]> = associations
 		.iter()
 		.filter(|a| a.source == location_id)
 		.map(|a| (a.target, a.strength))
