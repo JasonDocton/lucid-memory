@@ -125,6 +125,7 @@ pub fn compute_base_level_batch(
 /// # Returns
 ///
 /// Cosine similarity in range [-1, 1], or 0 if vectors have different lengths.
+#[inline]
 #[must_use]
 pub fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
 	if a.len() != b.len() {
@@ -192,6 +193,7 @@ pub fn cosine_similarity_batch(probe: &[f64], traces: &[Vec<f64>]) -> Vec<f64> {
 /// Cubing emphasizes strong matches and suppresses weak ones.
 /// This is what enables pattern completion from partial cues—
 /// only memories that strongly match the probe contribute.
+#[inline]
 #[must_use]
 pub fn nonlinear_activation(similarity: f64) -> f64 {
 	// Preserve sign for negative similarities
@@ -254,6 +256,7 @@ pub fn combine_activations(
 ///
 /// This is a logistic function centered on the threshold.
 /// Higher activation = higher probability.
+#[inline]
 #[must_use]
 pub fn retrieval_probability(
 	total_activation: f64,
@@ -282,6 +285,7 @@ pub fn retrieval_probability_batch(
 /// `latency = F × e^(-A) × 1000`
 ///
 /// Higher activation = faster retrieval.
+#[inline]
 #[must_use]
 pub fn retrieval_latency(total_activation: f64, latency_factor: f64) -> f64 {
 	latency_factor * (-total_activation).exp() * 1000.0

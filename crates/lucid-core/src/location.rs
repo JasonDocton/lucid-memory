@@ -186,6 +186,7 @@ impl Default for LocationConfig {
 /// // Many accesses: approaches 1.0 asymptotically
 /// assert!(compute_familiarity(100, &config) > 0.9);
 /// ```
+#[inline]
 #[must_use]
 pub fn compute_familiarity(access_count: u32, config: &LocationConfig) -> f64 {
 	let n = f64::from(access_count);
@@ -193,6 +194,7 @@ pub fn compute_familiarity(access_count: u32, config: &LocationConfig) -> f64 {
 }
 
 /// Compute familiarity for first access (aligns with curve).
+#[inline]
 #[must_use]
 pub fn initial_familiarity(config: &LocationConfig) -> f64 {
 	compute_familiarity(1, config)
@@ -431,6 +433,7 @@ pub fn infer_activity_type(
 /// - 3x: Same task, different activity (clear conceptual link)
 /// - 2x: Time-based + same activity (probable link)
 /// - 1x: Time-based only (possible link, fallback)
+#[inline]
 #[must_use]
 pub fn compute_association_strength(
 	current_count: u32,
@@ -442,6 +445,7 @@ pub fn compute_association_strength(
 }
 
 /// Determine the appropriate multiplier for an association.
+#[inline]
 #[must_use]
 #[allow(clippy::missing_const_for_fn)] // Can't be const due to config parameter
 pub fn association_multiplier(
@@ -523,6 +527,7 @@ pub fn get_associated_locations(
 }
 
 /// Check if a location is well-known based on familiarity threshold.
+#[inline]
 #[must_use]
 pub fn is_well_known(familiarity: f64, config: &LocationConfig) -> bool {
 	familiarity >= config.well_known_threshold
