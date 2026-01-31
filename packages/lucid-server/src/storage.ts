@@ -108,6 +108,42 @@ export interface StorageConfig {
 }
 
 // ============================================================================
+// Visual Memory Types
+// ============================================================================
+
+export type VisualMediaType = "image" | "video"
+export type VisualSource = "direct" | "video_frame" | "other"
+
+export interface VisualMemory {
+	id: string
+	description: string // The core memory content
+	originalPath: string | null // Reference only, not stored
+	mediaType: VisualMediaType
+	objects: string[]
+	emotionalValence: number
+	emotionalArousal: number
+	significance: number
+	sharedBy: string | null
+	source: VisualSource
+	receivedAt: number
+	lastAccessed: number | null
+	accessCount: number
+	createdAt: number
+}
+
+export interface VisualMemoryInput {
+	description: string
+	mediaType: VisualMediaType
+	source: VisualSource
+	originalPath?: string
+	objects?: string[]
+	emotionalValence?: number
+	emotionalArousal?: number
+	significance?: number
+	sharedBy?: string
+}
+
+// ============================================================================
 // Location Intuitions Types
 // ============================================================================
 
@@ -339,6 +375,47 @@ export class LucidStorage {
       CREATE INDEX IF NOT EXISTS idx_loc_assoc_source ON location_associations(source_id);
       CREATE INDEX IF NOT EXISTS idx_loc_assoc_target ON location_associations(target_id);
       CREATE INDEX IF NOT EXISTS idx_loc_assoc_strength ON location_associations(strength DESC);
+
+      -- Visual Memories (description-based, not file storage)
+      -- Stores Claude's semantic descriptions of images/videos with emotional context.
+      -- The actual media files remain with the user - we only store the "memory" (description).
+      CREATE TABLE IF NOT EXISTS visual_memories (
+        id TEXT PRIMARY KEY,
+        description TEXT NOT NULL,           -- Claude's description (the actual "memory")
+        original_path TEXT,                  -- Reference to original file (user's copy)
+        media_type TEXT NOT NULL CHECK (media_type IN ('image', 'video')),
+        objects TEXT DEFAULT '[]',           -- JSON array of detected objects
+        emotional_valence REAL DEFAULT 0,    -- -1 to 1
+        emotional_arousal REAL DEFAULT 0.5,  -- 0 to 1
+        significance REAL DEFAULT 0.5,       -- 0 to 1
+        shared_by TEXT,                      -- Who shared it
+        source TEXT NOT NULL CHECK (source IN ('direct', 'video_frame', 'other')),
+        received_at INTEGER NOT NULL,        -- When received
+        last_accessed INTEGER,               -- For base-level activation
+        access_count INTEGER DEFAULT 0,      -- Frequency tracking
+        created_at INTEGER NOT NULL
+      );
+
+      -- Visual Memory Embeddings (from description text)
+      CREATE TABLE IF NOT EXISTS visual_embeddings (
+        visual_memory_id TEXT PRIMARY KEY,
+        vector BLOB NOT NULL,
+        model TEXT NOT NULL,
+        FOREIGN KEY (visual_memory_id) REFERENCES visual_memories(id) ON DELETE CASCADE
+      );
+
+      -- Visual access history for ACT-R base-level activation
+      CREATE TABLE IF NOT EXISTS visual_access_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        visual_memory_id TEXT NOT NULL,
+        accessed_at INTEGER NOT NULL,
+        FOREIGN KEY (visual_memory_id) REFERENCES visual_memories(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_visual_memories_shared_by ON visual_memories(shared_by);
+      CREATE INDEX IF NOT EXISTS idx_visual_memories_received_at ON visual_memories(received_at);
+      CREATE INDEX IF NOT EXISTS idx_visual_memories_significance ON visual_memories(significance);
+      CREATE INDEX IF NOT EXISTS idx_visual_access_memory ON visual_access_history(visual_memory_id);
     `)
 	}
 
@@ -1758,6 +1835,281 @@ export class LucidStorage {
 	}
 
 	// ============================================================================
+	// Visual Memories
+	// ============================================================================
+
+	/**
+	 * Store a new visual memory.
+	 */
+	storeVisualMemory(input: VisualMemoryInput): VisualMemory {
+		const id = randomUUID()
+		const now = Date.now()
+		const objects = JSON.stringify(input.objects ?? [])
+
+		this.db
+			.prepare(`
+      INSERT INTO visual_memories
+      (id, description, original_path, media_type, objects, emotional_valence, emotional_arousal,
+       significance, shared_by, source, received_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+			.run(
+				id,
+				input.description,
+				input.originalPath ?? null,
+				input.mediaType,
+				objects,
+				input.emotionalValence ?? 0,
+				input.emotionalArousal ?? 0.5,
+				input.significance ?? 0.5,
+				input.sharedBy ?? null,
+				input.source,
+				now,
+				now
+			)
+
+		// Record initial access
+		this.recordVisualAccess(id)
+
+		// biome-ignore lint/style/noNonNullAssertion: just inserted with this id
+		return this.getVisualMemory(id)!
+	}
+
+	/**
+	 * Get a visual memory by ID.
+	 */
+	getVisualMemory(id: string): VisualMemory | null {
+		const row = this.db
+			.prepare(`SELECT * FROM visual_memories WHERE id = ?`)
+			.get(id) as VisualMemoryRow | null
+
+		return row ? this.rowToVisualMemory(row) : null
+	}
+
+	/**
+	 * Record an access event for a visual memory.
+	 */
+	recordVisualAccess(visualMemoryId: string): void {
+		const now = Date.now()
+
+		this.db
+			.prepare(`
+      UPDATE visual_memories
+      SET last_accessed = ?, access_count = access_count + 1
+      WHERE id = ?
+    `)
+			.run(now, visualMemoryId)
+
+		this.db
+			.prepare(`
+      INSERT INTO visual_access_history (visual_memory_id, accessed_at)
+      VALUES (?, ?)
+    `)
+			.run(visualMemoryId, now)
+	}
+
+	/**
+	 * Get access history for a visual memory (for base-level activation).
+	 */
+	getVisualAccessHistory(visualMemoryId: string): number[] {
+		const rows = this.db
+			.prepare(`
+      SELECT accessed_at FROM visual_access_history
+      WHERE visual_memory_id = ?
+      ORDER BY accessed_at DESC
+    `)
+			.all(visualMemoryId) as { accessed_at: number }[]
+
+		return rows.map((r) => r.accessed_at)
+	}
+
+	/**
+	 * Store an embedding for a visual memory.
+	 */
+	storeVisualEmbedding(
+		visualMemoryId: string,
+		vector: number[],
+		model: string
+	): void {
+		const blob = new Uint8Array(new Float32Array(vector).buffer)
+
+		this.db
+			.prepare(`
+      INSERT OR REPLACE INTO visual_embeddings (visual_memory_id, vector, model)
+      VALUES (?, ?, ?)
+    `)
+			.run(visualMemoryId, blob, model)
+	}
+
+	/**
+	 * Get embedding for a visual memory.
+	 */
+	getVisualEmbedding(visualMemoryId: string): number[] | null {
+		const row = this.db
+			.prepare(
+				`SELECT vector FROM visual_embeddings WHERE visual_memory_id = ?`
+			)
+			.get(visualMemoryId) as { vector: Uint8Array } | null
+
+		if (!row) return null
+
+		return Array.from(
+			new Float32Array(
+				row.vector.buffer,
+				row.vector.byteOffset,
+				row.vector.byteLength / 4
+			)
+		)
+	}
+
+	/**
+	 * Get all visual embeddings (for batch similarity operations).
+	 */
+	getAllVisualEmbeddings(): Map<string, number[]> {
+		const rows = this.db
+			.prepare(`SELECT visual_memory_id, vector FROM visual_embeddings`)
+			.all() as { visual_memory_id: string; vector: Uint8Array }[]
+
+		const map = new Map<string, number[]>()
+		for (const row of rows) {
+			const vector = Array.from(
+				new Float32Array(
+					row.vector.buffer,
+					row.vector.byteOffset,
+					row.vector.byteLength / 4
+				)
+			)
+			map.set(row.visual_memory_id, vector)
+		}
+		return map
+	}
+
+	/**
+	 * Check if visual memory has an embedding.
+	 */
+	hasVisualEmbedding(visualMemoryId: string): boolean {
+		const row = this.db
+			.prepare(`SELECT 1 FROM visual_embeddings WHERE visual_memory_id = ?`)
+			.get(visualMemoryId)
+		return !!row
+	}
+
+	/**
+	 * Get visual memories missing embeddings.
+	 */
+	getVisualMemoriesWithoutEmbeddings(limit = 100): VisualMemory[] {
+		const rows = this.db
+			.prepare(`
+      SELECT vm.* FROM visual_memories vm
+      LEFT JOIN visual_embeddings ve ON vm.id = ve.visual_memory_id
+      WHERE ve.visual_memory_id IS NULL
+      LIMIT ?
+    `)
+			.all(limit) as VisualMemoryRow[]
+
+		return rows.map((r) => this.rowToVisualMemory(r))
+	}
+
+	/**
+	 * Get all visual memories for retrieval (includes metadata for ranking).
+	 */
+	getAllVisualsForRetrieval(): {
+		visuals: VisualMemory[]
+		accessHistories: number[][]
+		emotionalWeights: number[]
+		significanceScores: number[]
+	} {
+		const rows = this.db
+			.prepare(`SELECT * FROM visual_memories ORDER BY created_at DESC`)
+			.all() as VisualMemoryRow[]
+
+		const visuals = rows.map((r) => this.rowToVisualMemory(r))
+		const accessHistories = visuals.map((v) =>
+			this.getVisualAccessHistory(v.id)
+		)
+
+		// Compute emotional weights: base 0.5 + arousal (0 to 1)
+		const emotionalWeights = visuals.map((v) => 0.5 + v.emotionalArousal)
+		const significanceScores = visuals.map((v) => v.significance)
+
+		return { visuals, accessHistories, emotionalWeights, significanceScores }
+	}
+
+	/**
+	 * Query visual memories with filters.
+	 */
+	queryVisualMemories(
+		options: {
+			mediaType?: VisualMediaType
+			sharedBy?: string
+			limit?: number
+			minSignificance?: number
+		} = {}
+	): VisualMemory[] {
+		const conditions: string[] = []
+		const values: (string | number)[] = []
+
+		if (options.mediaType) {
+			conditions.push("media_type = ?")
+			values.push(options.mediaType)
+		}
+		if (options.sharedBy) {
+			conditions.push("shared_by = ?")
+			values.push(options.sharedBy)
+		}
+		if (options.minSignificance !== undefined) {
+			conditions.push("significance >= ?")
+			values.push(options.minSignificance)
+		}
+
+		const where =
+			conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""
+		const limit = options.limit ?? 100
+
+		const rows = this.db
+			.prepare(`
+      SELECT * FROM visual_memories ${where}
+      ORDER BY received_at DESC
+      LIMIT ?
+    `)
+			.all(...values, limit) as VisualMemoryRow[]
+
+		return rows.map((r) => this.rowToVisualMemory(r))
+	}
+
+	/**
+	 * Delete a visual memory.
+	 */
+	deleteVisualMemory(id: string): boolean {
+		const result = this.db
+			.prepare(`DELETE FROM visual_memories WHERE id = ?`)
+			.run(id)
+		return result.changes > 0
+	}
+
+	/**
+	 * Convert row to VisualMemory object.
+	 */
+	private rowToVisualMemory(row: VisualMemoryRow): VisualMemory {
+		return {
+			id: row.id,
+			description: row.description,
+			originalPath: row.original_path,
+			mediaType: row.media_type as VisualMediaType,
+			objects: JSON.parse(row.objects || "[]"),
+			emotionalValence: row.emotional_valence,
+			emotionalArousal: row.emotional_arousal,
+			significance: row.significance,
+			sharedBy: row.shared_by,
+			source: row.source as VisualSource,
+			receivedAt: row.received_at,
+			lastAccessed: row.last_accessed,
+			accessCount: row.access_count,
+			createdAt: row.created_at,
+		}
+	}
+
+	// ============================================================================
 	// Maintenance
 	// ============================================================================
 
@@ -1809,6 +2161,7 @@ export class LucidStorage {
 		associationCount: number
 		projectCount: number
 		locationCount: number
+		visualMemoryCount: number
 		dbSizeBytes: number
 	} {
 		const memoryCount = (
@@ -1836,6 +2189,11 @@ export class LucidStorage {
 				.prepare(`SELECT COUNT(*) as c FROM location_intuitions`)
 				.get() as { c: number }
 		).c
+		const visualMemoryCount = (
+			this.db.prepare(`SELECT COUNT(*) as c FROM visual_memories`).get() as {
+				c: number
+			}
+		).c
 		const dbSizeBytes = (
 			this.db
 				.prepare(
@@ -1850,6 +2208,7 @@ export class LucidStorage {
 			associationCount,
 			projectCount,
 			locationCount,
+			visualMemoryCount,
 			dbSizeBytes,
 		}
 	}
@@ -1946,4 +2305,21 @@ interface LocationAccessContextRow {
 	activity_source: string
 	is_summary: number
 	accessed_at: string
+}
+
+interface VisualMemoryRow {
+	id: string
+	description: string
+	original_path: string | null
+	media_type: string
+	objects: string
+	emotional_valence: number
+	emotional_arousal: number
+	significance: number
+	shared_by: string | null
+	source: string
+	received_at: number
+	last_accessed: number | null
+	access_count: number
+	created_at: number
 }

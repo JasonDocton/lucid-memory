@@ -114,6 +114,7 @@ pub mod activation;
 pub mod location;
 pub mod retrieval;
 pub mod spreading;
+pub mod visual;
 
 pub use activation::{
 	combine_activations, compute_base_level, cosine_similarity, nonlinear_activation,
@@ -128,6 +129,17 @@ pub use location::{
 	compute_familiarity, get_associated_locations, infer_activity_type, initial_familiarity,
 	is_well_known, spread_location_activation, ActivityInference, ActivityType, InferenceSource,
 	LocationAssociation, LocationConfig, LocationIntuition,
+};
+
+// Visual Memory
+pub use visual::{
+	compute_pruning_candidates, compute_tag_strength, prepare_frame_description_prompt,
+	prepare_synthesis_prompt, retrieve_visual, select_frames_for_description, should_prune,
+	should_tag, ConsolidationState, ConsolidationWindow, EmotionalContext,
+	FrameCandidate, FrameDescriptionConfig, FrameDescriptionResult, PruningCandidate,
+	PruningReason, TagReason, TranscriptSegment, VisualConfig, VisualConsolidationState,
+	VisualMemory, VisualRetrievalCandidate, VisualRetrievalConfig, VisualRetrievalInput,
+	VisualSource, VisualTag,
 };
 
 /// Library version

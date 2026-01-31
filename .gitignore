@@ -10,6 +10,7 @@ dist
 target
 *.tgz
 docs/
+.archive/
 
 # code coverage
 coverage

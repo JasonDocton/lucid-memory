@@ -1,0 +1,48 @@
+[package]
+name = "lucid-perception"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Video processing for lucid-memory: frame extraction, scene detection, and audio transcription"
+repository.workspace = true
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+serde_json = "1"
+
+# Error handling
+thiserror = { workspace = true }
+
+# Async runtime
+tokio = { version = "1.0", features = ["process", "fs", "rt-multi-thread", "sync", "io-util", "macros"] }
+
+# Image processing
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+# Perceptual hashing
+image_hasher = "2.0"
+
+# Unique identifiers
+uuid = { version = "1.0", features = ["v4"] }
+
+# Logging
+tracing = "0.1"
+
+# Whisper transcription
+whisper-rs = { version = "0.12", optional = true }
+
+# Directory paths
+dirs = { version = "5.0", optional = true }
+
+[dev-dependencies]
+tempfile = "3.0"
+tokio-test = "0.4"
+
+[features]
+default = []
+transcription = ["whisper-rs", "dirs"]
+cuda = ["whisper-rs?/cuda"]
+
+[lints]
+workspace = true

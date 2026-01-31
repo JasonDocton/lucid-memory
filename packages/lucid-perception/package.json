@@ -1,0 +1,42 @@
+{
+	"name": "@lucid-memory/perception",
+	"version": "0.1.0",
+	"description": "Video processing for lucid-memory: frame extraction, scene detection, and transcription",
+	"main": "index.js",
+	"types": "index.d.ts",
+	"files": ["index.js", "index.d.ts", "*.node"],
+	"scripts": {
+		"build": "napi build --platform --release --manifest-path ../../crates/lucid-perception-napi/Cargo.toml --output-dir .",
+		"build:debug": "napi build --platform --manifest-path ../../crates/lucid-perception-napi/Cargo.toml --output-dir .",
+		"test": "bun test"
+	},
+	"napi": {
+		"name": "lucid-perception",
+		"triples": {
+			"defaults": false,
+			"additional": [
+				"aarch64-apple-darwin",
+				"x86_64-apple-darwin",
+				"x86_64-unknown-linux-gnu",
+				"aarch64-unknown-linux-gnu"
+			]
+		}
+	},
+	"devDependencies": {
+		"@napi-rs/cli": "^3.0.0-alpha.62"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/JasonDocton/lucid-memory"
+	},
+	"license": "GPL-3.0",
+	"keywords": [
+		"lucid",
+		"memory",
+		"video",
+		"perception",
+		"transcription",
+		"whisper",
+		"ffmpeg"
+	]
+}

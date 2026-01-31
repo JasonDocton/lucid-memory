@@ -684,6 +684,25 @@ case $EMBED_CHOICE in
 esac
 show_progress  # Step 4: Embedding provider
 
+# === Download Whisper Model for Transcription ===
+
+LUCID_MODELS="$LUCID_DIR/models"
+mkdir -p "$LUCID_MODELS"
+
+if [ ! -f "$LUCID_MODELS/ggml-base.en.bin" ]; then
+    echo ""
+    echo "Downloading Whisper model for video transcription (74MB)..."
+    if curl -L -o "$LUCID_MODELS/ggml-base.en.bin" \
+      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" 2>/dev/null; then
+        success "Whisper model downloaded"
+    else
+        warn "Could not download Whisper model - video transcription will be unavailable"
+        echo "  To download manually: curl -L -o $LUCID_MODELS/ggml-base.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+    fi
+else
+    success "Whisper model already present"
+fi
+
 # === Configure Claude Code ===
 
 echo ""

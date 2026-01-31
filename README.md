@@ -13,7 +13,7 @@ curl -fsSL lucidmemory.dev/install | bash
 <sub>Works with Claude Code · macOS & Linux · <a href="#windows">Windows instructions</a></sub>
 
 <br><br>
-<b>New in 0.2.0:</b> <a href="#location-intuitions">Location Intuitions</a> — Claude now builds spatial memory of your codebase, navigating familiar files without searching.
+<b>New in 0.3.0:</b> <a href="#visual-memory">Visual Memory</a> — Claude now sees and remembers images and videos you share, recalling them when relevant.
 
 </div>
 
@@ -117,6 +117,38 @@ Lucid implements how humans actually remember:
 | Context | Ignored | Shapes what surfaces |
 | Time | Flat | Recent/frequent = stronger |
 | Associations | None | Memories activate each other |
+
+<h3 id="visual-memory">Visual Memory</h3>
+
+**New in 0.3:** Claude now sees and remembers images and videos you share.
+
+When you share media in your conversation, Claude automatically processes and remembers it—not by storing the file, but by understanding and describing what it sees and hears. Later, when you mention something related, those visual memories surface naturally.
+
+| Without Visual Memory | With Visual Memory |
+| --------------------- | ------------------ |
+| "What was in that screenshot?" | "That screenshot showed the error in the auth module—the stack trace pointed to line 47." |
+| Claude forgets media between sessions | Visual memories persist and surface when relevant |
+| Videos are just files | Claude remembers both what it saw AND what was said |
+
+**How it works:**
+
+- **Images** — Claude sees the image, describes it, and stores that understanding with semantic embeddings
+- **Videos** — Rust parallel processing extracts frames and transcribes audio simultaneously; Claude synthesizes both into a holistic memory
+- **Retrieval** — Visual memories are retrieved via the same cognitive model as text memories (ACT-R activation + semantic similarity)
+- **Automatic** — No commands needed; share media, Claude remembers
+
+<details>
+<summary><b>Supported formats</b></summary>
+
+**Images:** jpg, jpeg, png, gif, webp, heic, heif
+
+**Videos:** mp4, mov, avi, mkv, webm, m4v
+
+**URLs:** YouTube, Vimeo, youtu.be, direct media links
+
+**Paths:** Simple paths, quoted paths with spaces, ~ expansion
+
+</details>
 
 <h3 id="location-intuitions">Location Intuitions</h3>
 
@@ -338,6 +370,12 @@ When memory 0 activates, memory 1 receives proportional activation.
 - Moser, E. I., Kropff, E., & Moser, M. B. (2008). Place cells, grid cells, and the brain's spatial representation system. *Annual Review of Neuroscience*, 31, 69-89.
 - Squire, L. R. (1992). Memory and the hippocampus: A synthesis from findings with rats, monkeys, and humans. *Psychological Review*, 99(2), 195-231.
 - Hebb, D. O. (1949). *The Organization of Behavior*
+
+### Visual Memory
+- Paivio, A. (1986). *Mental Representations: A Dual Coding Approach* — Images and words are processed through separate but interconnected channels
+- Standing, L. (1973). Learning 10,000 pictures. *Quarterly Journal of Experimental Psychology*, 25(2), 207-222. — Humans have remarkable capacity for visual memory
+- Brady, T. F., Konkle, T., Alvarez, G. A., & Oliva, A. (2008). Visual long-term memory has a massive storage capacity for object details. *PNAS*, 105(38), 14325-14329.
+- Tulving, E. (1972). Episodic and semantic memory. In E. Tulving & W. Donaldson (Eds.), *Organization of Memory* — Visual memories as episodic traces bound to context
 
 ## License
 

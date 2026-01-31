@@ -68,6 +68,25 @@ function startBackgroundEmbeddingProcessor(): void {
 }
 
 /**
+ * Process pending visual embeddings in the background.
+ */
+function startBackgroundVisualEmbeddingProcessor(): void {
+	setInterval(async () => {
+		if (!hasSemanticSearch) return
+		try {
+			const processed = await retrieval.processPendingVisualEmbeddings(10)
+			if (processed > 0) {
+				console.error(
+					`[lucid] Processed ${processed} pending visual embeddings`
+				)
+			}
+		} catch (error) {
+			console.error("[lucid] Error processing visual embeddings:", error)
+		}
+	}, 5000)
+}
+
+/**
  * Apply familiarity decay to stale locations in the background.
  *
  * Biological analogy: Forgetting happens passively over time, not on-demand.
@@ -107,7 +126,6 @@ const server = new McpServer({
 /**
  * memory_store - Save something important to remember
  */
-// @ts-expect-error - Zod schema causes excessive type depth
 server.tool(
 	"memory_store",
 	"Store something important to remember. Use this proactively when you learn something useful about the project, solve a bug, make a decision, or encounter context that might be valuable later.",
@@ -193,7 +211,6 @@ server.tool(
 /**
  * memory_query - Search for relevant memories
  */
-// @ts-expect-error - Zod schema causes excessive type depth
 server.tool(
 	"memory_query",
 	"Search for relevant memories. Use when you need to recall past learnings, decisions, bugs, or context.",
@@ -472,13 +489,375 @@ server.tool(
 )
 
 // ============================================================================
+// Visual Memory Tools
+// ============================================================================
+
+/**
+ * visual_store - Store a visual memory (image/video description)
+ */
+server.tool(
+	"visual_store",
+	"Store a visual memory - describe an image or video you've seen. Called automatically after viewing media shared by the user.",
+	{
+		description: z
+			.string()
+			.describe(
+				"Your description of the image/video - what you see, objects, people, setting, mood"
+			),
+		mediaType: z
+			.enum(["image", "video"])
+			.optional()
+			.default("image")
+			.describe("Type of media"),
+		objects: z
+			.array(z.string())
+			.optional()
+			.describe("List of objects/people detected"),
+		significance: z
+			.number()
+			.min(0)
+			.max(1)
+			.optional()
+			.default(0.5)
+			.describe("How memorable is this? 0-1"),
+		emotionalValence: z
+			.number()
+			.min(-1)
+			.max(1)
+			.optional()
+			.default(0)
+			.describe("Pleasant (+1) to unpleasant (-1)"),
+		emotionalArousal: z
+			.number()
+			.min(0)
+			.max(1)
+			.optional()
+			.default(0.5)
+			.describe("Calm (0) to exciting (1)"),
+		sharedBy: z.string().optional().describe("Who shared this media"),
+		originalPath: z.string().optional().describe("Path to original file"),
+	},
+	async ({
+		description,
+		mediaType,
+		objects,
+		significance,
+		emotionalValence,
+		emotionalArousal,
+		sharedBy,
+		originalPath,
+	}) => {
+		try {
+			const visual = await retrieval.storeVisual({
+				description,
+				mediaType: mediaType as "image" | "video",
+				source: "direct",
+				objects,
+				significance,
+				emotionalValence,
+				emotionalArousal,
+				sharedBy,
+				originalPath,
+			})
+
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify(
+							{
+								success: true,
+								id: visual.id,
+								message: `Remembered: "${description.slice(0, 50)}${description.length > 50 ? "..." : ""}"`,
+							},
+							null,
+							2
+						),
+					},
+				],
+			}
+		} catch (error) {
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify({ error: String(error) }),
+					},
+				],
+				isError: true,
+			}
+		}
+	}
+)
+
+/**
+ * visual_search - Search visual memories
+ */
+server.tool(
+	"visual_search",
+	"Search visual memories. Use when you need to recall images or videos you've seen.",
+	{
+		query: z.string().describe("What to search for - natural language"),
+		limit: z
+			.number()
+			.min(1)
+			.max(10)
+			.optional()
+			.default(5)
+			.describe("Max results"),
+	},
+	async ({ query, limit }) => {
+		try {
+			const results = await retrieval.retrieveVisual(query, {
+				maxResults: limit,
+			})
+
+			if (results.length === 0) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: JSON.stringify(
+								{
+									message: "No visual memories found matching your query.",
+								},
+								null,
+								2
+							),
+						},
+					],
+				}
+			}
+
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify(
+							{
+								count: results.length,
+								visuals: results.map((r) => ({
+									id: r.visual.id,
+									description: r.visual.description,
+									mediaType: r.visual.mediaType,
+									objects: r.visual.objects,
+									relevance: Math.round(r.score * 100) / 100,
+									sharedBy: r.visual.sharedBy,
+									receivedAt: new Date(r.visual.receivedAt).toISOString(),
+								})),
+							},
+							null,
+							2
+						),
+					},
+				],
+			}
+		} catch (error) {
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify({ error: String(error) }),
+					},
+				],
+				isError: true,
+			}
+		}
+	}
+)
+
+// ============================================================================
+// Video Processing Tools
+// ============================================================================
+
+/**
+ * video_process - Process video with Rust parallel pipeline (frames + audio)
+ *
+ * Uses tokio::join! for parallel extraction of frames and audio transcription.
+ */
+server.tool(
+	"video_process",
+	"Process a video file using Rust parallel pipeline. Extracts frames and transcribes audio simultaneously. Returns frame paths to read and describe, plus transcript.",
+	{
+		videoPath: z.string().describe("Path to video file"),
+		maxFrames: z
+			.number()
+			.min(1)
+			.max(100)
+			.optional()
+			.default(20)
+			.describe("Maximum frames to extract (default: 20)"),
+		skipTranscription: z
+			.boolean()
+			.optional()
+			.default(false)
+			.describe("Skip audio transcription"),
+		sharedBy: z.string().optional().describe("Who shared this video"),
+	},
+	async ({ videoPath, maxFrames, skipTranscription, sharedBy }) => {
+		try {
+			// Try to load Rust perception module
+			let perception: typeof import("@lucid-memory/perception") | null = null
+			try {
+				perception = await import("@lucid-memory/perception")
+			} catch {
+				// Fall back to TypeScript implementation
+			}
+
+			if (perception) {
+				// Use Rust parallel processing
+				const output = await perception.videoProcess(videoPath, {
+					video: { maxFrames },
+					skipTranscription,
+					enableSceneDetection: true,
+				})
+
+				// Filter to scene changes for more meaningful frames
+				const keyFrames = output.frames
+					.filter((f) => f.isSceneChange || f.isKeyframe)
+					.slice(0, maxFrames)
+
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: JSON.stringify(
+								{
+									success: true,
+									metadata: {
+										duration: Math.round(output.metadata.durationSeconds),
+										width: output.metadata.width,
+										height: output.metadata.height,
+										fps: Math.round(output.metadata.frameRate),
+										hasAudio: output.metadata.hasAudio,
+									},
+									frames: keyFrames.map((f) => ({
+										path: f.path,
+										timestamp: Math.round(f.timestampSeconds),
+										isSceneChange: f.isSceneChange,
+									})),
+									transcript: output.transcript?.text ?? null,
+									transcriptSegments: output.transcript?.segments.map((s) => ({
+										start: s.startMs / 1000,
+										end: s.endMs / 1000,
+										text: s.text,
+									})),
+									stats: {
+										framesExtracted: output.stats.framesExtracted,
+										sceneChanges: output.stats.sceneChanges,
+										extractionTimeMs: output.stats.extractionTimeMs,
+										transcriptionTimeMs: output.stats.transcriptionTimeMs,
+									},
+									sharedBy,
+									instructions:
+										"Read each frame image to see the video content. Use the transcript for audio context. Then call visual_store with a synthesized 2-3 sentence description of the entire video (mediaType: 'video').",
+								},
+								null,
+								2
+							),
+						},
+					],
+				}
+			}
+
+			// Fallback to TypeScript implementation
+			const { getVideoMetadata, extractFrames, selectFrames, createWorkDir } =
+				await import("./video.ts")
+
+			const workDir = createWorkDir()
+			const metadata = await getVideoMetadata(videoPath)
+			const allFrames = await extractFrames(videoPath, workDir, { fps: 1 })
+			const selectedIndices = selectFrames(allFrames, maxFrames, null)
+			const selectedFrames = selectedIndices.map((i) => allFrames[i])
+
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify(
+							{
+								success: true,
+								metadata: {
+									duration: Math.round(metadata.duration),
+									width: metadata.width,
+									height: metadata.height,
+									fps: Math.round(metadata.fps),
+								},
+								frames: selectedFrames.map((f) => ({
+									path: f.path,
+									timestamp: Math.round(f.timestamp),
+								})),
+								transcript: null,
+								sharedBy,
+								workDir,
+								instructions:
+									"Read each frame image, describe what you see, then call visual_store with a synthesized description (mediaType: 'video').",
+							},
+							null,
+							2
+						),
+					},
+				],
+			}
+		} catch (error) {
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify({
+							error: String(error),
+							hint: "Make sure ffmpeg is installed: brew install ffmpeg",
+						}),
+					},
+				],
+				isError: true,
+			}
+		}
+	}
+)
+
+/**
+ * video_cleanup - Clean up temporary video processing files
+ */
+server.tool(
+	"video_cleanup",
+	"Clean up temporary files from video processing. Call this after you've finished describing and storing a video.",
+	{
+		workDir: z.string().describe("The workDir returned by video_prepare"),
+	},
+	async ({ workDir }) => {
+		try {
+			const { cleanupWorkDir } = await import("./video.ts")
+			cleanupWorkDir(workDir)
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify({ success: true, message: "Cleaned up" }),
+					},
+				],
+			}
+		} catch (error) {
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify({ error: String(error) }),
+					},
+				],
+				isError: true,
+			}
+		}
+	}
+)
+
+// ============================================================================
 // Location Intuition Tools
 // ============================================================================
 
 /**
  * location_record - Record that you accessed a file
  */
-// @ts-expect-error - Zod schema causes excessive type depth
 server.tool(
 	"location_record",
 	"Record that you accessed a file - builds familiarity over time. Use this proactively when reading or editing files to build spatial memory.",
@@ -1301,6 +1680,7 @@ async function main(): Promise<void> {
 
 	// Start background processors
 	startBackgroundEmbeddingProcessor()
+	startBackgroundVisualEmbeddingProcessor()
 	startBackgroundDecayProcessor()
 
 	// Now connect to transport

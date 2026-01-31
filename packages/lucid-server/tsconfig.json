@@ -13,8 +13,7 @@
 		"declarationMap": true,
 		"sourceMap": true,
 		"noEmit": true,
-		"allowImportingTsExtensions": true,
-		"types": ["bun-types", "@types/better-sqlite3"]
+		"allowImportingTsExtensions": true
 	},
 	"include": ["src/**/*"],
 	"exclude": ["node_modules", "dist"]

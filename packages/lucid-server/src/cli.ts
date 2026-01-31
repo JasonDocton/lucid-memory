@@ -6,7 +6,7 @@
  * Simple CLI for hook integration and manual operations.
  *
  * Usage:
- *   lucid context "what I'm working on"      - Get relevant context
+ *   lucid context "what I'm working on"      - Get relevant context (includes visual memories)
  *   lucid store "content" --type learning    - Store a memory
  *   lucid stats                              - Show memory stats
  *   lucid status                             - Check system status
@@ -37,12 +37,19 @@ async function main() {
 			const budgetArg = args
 				.find((a) => a.startsWith("--budget="))
 				?.split("=")[1]
+			const visualRatioArg = args
+				.find((a) => a.startsWith("--visual-ratio="))
+				?.split("=")[1]
 			// Default: 200 tokens (~800 chars) - conservative to protect user's context
-			const tokenBudget = budgetArg ? parseInt(budgetArg, 10) : 200
+			const tokenBudget = budgetArg ? Number.parseInt(budgetArg, 10) : 200
+			// Default: 30% of budget for visual memories
+			const visualRatio = visualRatioArg
+				? Number.parseFloat(visualRatioArg)
+				: 0.3
 
 			if (!task) {
 				console.error(
-					"Usage: lucid context 'what you're working on' [--project=/path] [--budget=200]"
+					"Usage: lucid context 'what you're working on' [--project=/path] [--budget=200] [--visual-ratio=0.3]"
 				)
 				process.exit(1)
 			}
@@ -53,15 +60,16 @@ async function main() {
 				projectId = project.id
 			}
 
-			// getContext now handles:
-			// 1. Similarity threshold (only strong matches)
-			// 2. Token budgeting (respects user's context window)
-			// 3. Gist preference (uses compressed semantic essence)
-			const context = await retrieval.getContext(task, projectId, {
+			// Get unified context with both text and visual memories
+			const context = await retrieval.getContextWithVisuals(task, projectId, {
 				tokenBudget,
+				visualRatio,
 			})
 
-			if (context.memories.length === 0) {
+			if (
+				context.memories.length === 0 &&
+				context.visualMemories.length === 0
+			) {
 				// Output nothing - no relevant context (preserves user's tokens)
 				process.exit(0)
 			}
@@ -69,12 +77,21 @@ async function main() {
 			// Output context using gists - compressed semantic essence
 			console.log("<lucid-context>")
 			console.log(context.summary)
+
+			// Text memories
 			for (const candidate of context.memories) {
-				// getContext already filtered by budget, use gist
 				const text =
 					candidate.memory.gist ?? candidate.memory.content.slice(0, 150)
 				console.log(`- [${candidate.memory.type}] ${text}`)
 			}
+
+			// Visual memories
+			for (const candidate of context.visualMemories) {
+				console.log(
+					`- [Visual, ${candidate.visual.mediaType}] ${candidate.visual.description}`
+				)
+			}
+
 			console.log("</lucid-context>")
 			break
 		}
@@ -108,6 +125,7 @@ async function main() {
 		case "stats": {
 			const stats = retrieval.storage.getStats()
 			console.log(`Memories: ${stats.memoryCount}`)
+			console.log(`Visual memories: ${stats.visualMemoryCount}`)
 			console.log(`With embeddings: ${stats.embeddingCount}`)
 			console.log(`Associations: ${stats.associationCount}`)
 			console.log(`Projects: ${stats.projectCount}`)
@@ -232,15 +250,25 @@ async function main() {
 Lucid Memory CLI
 
 Commands:
-  context <task> [--project=/path]   Get relevant context for a task
-  store <content> [--type=TYPE]      Store a memory (types: learning, decision, context, bug, solution)
+  context <task> [options]           Get relevant context (text + visual memories)
+    --project=/path                  Filter by project
+    --budget=200                     Token budget (default: 200)
+    --visual-ratio=0.3               Ratio for visual memories (default: 0.3)
+
+  store <content> [options]          Store a memory
+    --type=TYPE                      Type: learning, decision, context, bug, solution
+    --project=/path                  Associate with project
+
   stats                              Show memory statistics
   status                             Check system status
 
 Examples:
   lucid context "implementing auth" --project=/my/project
-  lucid store "Auth uses JWT tokens stored in httpOnly cookies" --type=decision
+  lucid store "Auth uses JWT tokens" --type=decision
   lucid status
+
+Visual memories are automatically created when images/videos are shared.
+They are automatically retrieved via semantic search on the context command.
       `)
 			break
 		}

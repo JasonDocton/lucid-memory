@@ -29,6 +29,8 @@ import {
 	LucidStorage,
 	type Memory,
 	type StorageConfig,
+	type VisualMemory,
+	type VisualMemoryInput,
 } from "./storage.ts"
 
 // Try to load native Rust bindings, fall back to TypeScript if not available
@@ -64,6 +66,15 @@ type JsRetrievalConfig = {
 
 export interface RetrievalCandidate {
 	memory: Memory
+	score: number
+	similarity: number
+	baseLevel: number
+	spreading: number
+	probability: number
+}
+
+export interface VisualRetrievalCandidate {
+	visual: VisualMemory
 	score: number
 	similarity: number
 	baseLevel: number
@@ -549,6 +560,352 @@ export class LucidRetrieval {
 		}
 
 		return pending.length
+	}
+
+	// ============================================================================
+	// Visual Memory Retrieval
+	// ============================================================================
+
+	/**
+	 * Retrieve visual memories relevant to a query.
+	 * Uses native Rust bindings when available for high-performance retrieval.
+	 */
+	async retrieveVisual(
+		query: string,
+		options: Partial<RetrievalConfig> = {}
+	): Promise<VisualRetrievalCandidate[]> {
+		const config = { ...DEFAULT_CONFIG, ...options }
+		const limit = config.maxResults ?? config.limit ?? 10
+
+		// Get all visual data needed for retrieval
+		const { visuals, accessHistories, emotionalWeights, significanceScores } =
+			this.storage.getAllVisualsForRetrieval()
+
+		if (visuals.length === 0) {
+			return []
+		}
+
+		// If no embedder, fall back to recency-based ranking
+		if (!this.embedder) {
+			if (!this.didWarnNoEmbeddings) {
+				console.error(
+					"[lucid] ⚠️  No embeddings available - visual results based on recency only"
+				)
+				this.didWarnNoEmbeddings = true
+			}
+			const now = Date.now()
+			const candidates: VisualRetrievalCandidate[] = visuals.map(
+				(visual, i) => {
+					const history = accessHistories[i]
+					const baseLevel =
+						shouldUseNative && nativeModule
+							? nativeModule.computeBaseLevel(history, now, config.decay)
+							: computeBaseLevelTS(history, now, config.decay)
+					const probability =
+						shouldUseNative && nativeModule
+							? nativeModule.retrievalProbability(
+									baseLevel,
+									config.threshold,
+									config.noise
+								)
+							: retrievalProbabilityTS(
+									baseLevel,
+									config.threshold,
+									config.noise
+								)
+
+					return {
+						visual,
+						score: baseLevel,
+						similarity: 0,
+						baseLevel,
+						spreading: 0,
+						probability,
+					}
+				}
+			)
+
+			candidates.sort((a, b) => b.score - a.score)
+			return candidates.slice(0, limit)
+		}
+
+		// Get probe embedding
+		const probeResult = await this.embedder.embed(query)
+		const probeVector = probeResult.vector
+
+		const embeddingsMap = this.storage.getAllVisualEmbeddings()
+
+		// Build arrays for retrieval - only include visuals with embeddings
+		const visualsWithEmbeddings: VisualMemory[] = []
+		const visualEmbeddings: number[][] = []
+		const visualAccessHistories: number[][] = []
+		const visualEmotionalWeights: number[] = []
+		const visualSignificanceScores: number[] = []
+
+		for (let i = 0; i < visuals.length; i++) {
+			const visual = visuals[i]
+			const embedding = embeddingsMap.get(visual.id)
+			if (!embedding) continue
+
+			visualsWithEmbeddings.push(visual)
+			visualEmbeddings.push(embedding)
+			visualAccessHistories.push(accessHistories[i] || [Date.now()])
+			visualEmotionalWeights.push(emotionalWeights[i])
+			visualSignificanceScores.push(significanceScores[i])
+		}
+
+		if (visualsWithEmbeddings.length === 0) {
+			return []
+		}
+
+		// Use native Rust visual retrieval if available
+		if (shouldUseNative && nativeModule) {
+			const now = Date.now()
+			const nativeResults = nativeModule.visualRetrieve(
+				probeVector,
+				visualEmbeddings,
+				visualAccessHistories,
+				visualEmotionalWeights,
+				visualSignificanceScores,
+				now,
+				null, // No associations for now
+				{
+					decayRate: config.decay,
+					activationThreshold: config.threshold,
+					noiseParameter: config.noise,
+					spreadingDepth: 3,
+					spreadingDecay: 0.7,
+					minProbability: config.minProbability,
+					maxResults: limit,
+					bidirectional: true,
+					emotionalBoost: 0.3,
+					significanceBoost: 0.2,
+				}
+			)
+
+			const candidates: VisualRetrievalCandidate[] = nativeResults.map(
+				(result) => {
+					const visual = visualsWithEmbeddings[result.index]
+					const embedding = visualEmbeddings[result.index]
+					const similarity = nativeModule?.cosineSimilarity(
+						probeVector,
+						embedding
+					)
+
+					return {
+						visual,
+						score: result.totalActivation,
+						similarity,
+						baseLevel: result.baseLevel,
+						spreading: result.spreading,
+						probability: result.probability,
+					}
+				}
+			)
+
+			// Record access for returned visuals
+			for (const candidate of candidates) {
+				this.storage.recordVisualAccess(candidate.visual.id)
+			}
+
+			return candidates
+		}
+
+		// TypeScript fallback for visual retrieval
+		const now = Date.now()
+		const candidates: VisualRetrievalCandidate[] = []
+
+		for (let i = 0; i < visualsWithEmbeddings.length; i++) {
+			const visual = visualsWithEmbeddings[i]
+			const embedding = visualEmbeddings[i]
+
+			const similarity = tsCosineSimilarity(probeVector, embedding)
+			const probeActivation = similarity ** 3
+			const history = visualAccessHistories[i]
+			const baseLevel = computeBaseLevelTS(history, now, config.decay)
+
+			// Add significance and emotional boosts
+			const emotionalWeight = visualEmotionalWeights[i]
+			const significance = visualSignificanceScores[i]
+			const emotionalBoost =
+				emotionalWeight > 0.7 ? (emotionalWeight - 0.7) * 0.3 : 0
+			const significanceBoost = significance * 0.2
+
+			const score =
+				config.probeWeight * probeActivation +
+				config.baseLevelWeight * baseLevel +
+				emotionalBoost +
+				significanceBoost
+
+			const probability = retrievalProbabilityTS(
+				score,
+				config.threshold,
+				config.noise
+			)
+
+			if (probability >= config.minProbability) {
+				candidates.push({
+					visual,
+					score,
+					similarity,
+					baseLevel,
+					spreading: 0,
+					probability,
+				})
+			}
+		}
+
+		candidates.sort((a, b) => b.score - a.score)
+		const results = candidates.slice(0, limit)
+
+		// Record access for returned visuals
+		for (const candidate of results) {
+			this.storage.recordVisualAccess(candidate.visual.id)
+		}
+
+		return results
+	}
+
+	/**
+	 * Store a visual memory with automatic embedding generation.
+	 */
+	async storeVisual(input: VisualMemoryInput): Promise<VisualMemory> {
+		// Store the visual memory
+		const visual = this.storage.storeVisualMemory(input)
+
+		// Generate and store embedding from description if embedder is available
+		if (this.embedder) {
+			try {
+				const embedding = await this.embedder.embed(input.description)
+				this.storage.storeVisualEmbedding(
+					visual.id,
+					embedding.vector,
+					embedding.model
+				)
+			} catch (error) {
+				console.error("[lucid] Visual embedding failed:", error)
+			}
+		}
+
+		return visual
+	}
+
+	/**
+	 * Process pending visual embeddings (for background generation).
+	 */
+	async processPendingVisualEmbeddings(batchSize = 10): Promise<number> {
+		if (!this.embedder) return 0
+
+		const pending = this.storage.getVisualMemoriesWithoutEmbeddings(batchSize)
+		if (pending.length === 0) return 0
+
+		const texts = pending.map((v) => v.description)
+		const embeddings = await this.embedder.embedBatch(texts)
+
+		for (let i = 0; i < pending.length; i++) {
+			this.storage.storeVisualEmbedding(
+				pending[i].id,
+				embeddings[i].vector,
+				embeddings[i].model
+			)
+		}
+
+		return pending.length
+	}
+
+	/**
+	 * Get unified context including both text and visual memories.
+	 *
+	 * Token budgeting with visual ratio:
+	 * - Default budget: 300 tokens
+	 * - Default visualRatio: 0.3 (30% for visual, 70% for text)
+	 */
+	async getContextWithVisuals(
+		currentTask: string,
+		projectId?: string,
+		options: {
+			tokenBudget?: number
+			minSimilarity?: number
+			visualRatio?: number
+		} = {}
+	): Promise<{
+		memories: RetrievalCandidate[]
+		visualMemories: VisualRetrievalCandidate[]
+		summary: string
+		tokensUsed: number
+	}> {
+		const tokenBudget = options.tokenBudget ?? 300
+		const minSimilarity = options.minSimilarity ?? 0.3
+		const visualRatio = options.visualRatio ?? 0.3
+
+		// Calculate budget splits
+		const visualBudget = Math.floor(tokenBudget * visualRatio)
+		const textBudget = tokenBudget - visualBudget
+
+		// Retrieve text memories
+		const textCandidates = await this.retrieve(
+			currentTask,
+			{ maxResults: 10 },
+			projectId
+		)
+		const relevantText = textCandidates.filter(
+			(c) => c.similarity >= minSimilarity
+		)
+
+		// Retrieve visual memories
+		const visualCandidates = await this.retrieveVisual(currentTask, {
+			maxResults: 5,
+		})
+		const relevantVisual = visualCandidates.filter(
+			(c) => c.similarity >= minSimilarity
+		)
+
+		// Budget allocation for text memories
+		const selectedText: RetrievalCandidate[] = []
+		let textTokensUsed = 0
+
+		for (const candidate of relevantText) {
+			const text =
+				candidate.memory.gist ?? generateGist(candidate.memory.content, 150)
+			const tokens = estimateTokens(text)
+
+			if (textTokensUsed + tokens <= textBudget) {
+				selectedText.push(candidate)
+				textTokensUsed += tokens
+			} else {
+				break
+			}
+		}
+
+		// Budget allocation for visual memories
+		const selectedVisual: VisualRetrievalCandidate[] = []
+		let visualTokensUsed = 0
+
+		for (const candidate of relevantVisual) {
+			const tokens = estimateTokens(candidate.visual.description)
+
+			if (visualTokensUsed + tokens <= visualBudget) {
+				selectedVisual.push(candidate)
+				visualTokensUsed += tokens
+			} else {
+				break
+			}
+		}
+
+		const totalTokensUsed = textTokensUsed + visualTokensUsed
+		const totalMemories = selectedText.length + selectedVisual.length
+
+		const summary =
+			totalMemories > 0
+				? `Relevant context (${selectedText.length} text, ${selectedVisual.length} visual, ~${totalTokensUsed} tokens):`
+				: ""
+
+		return {
+			memories: selectedText,
+			visualMemories: selectedVisual,
+			summary,
+			tokensUsed: totalTokensUsed,
+		}
 	}
 }
 

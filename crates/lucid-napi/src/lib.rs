@@ -20,6 +20,14 @@ use lucid_core::{
 	},
 	retrieval::{retrieve as core_retrieve, RetrievalConfig as CoreConfig, RetrievalInput},
 	spreading::Association as CoreAssociation,
+	visual::{
+		compute_pruning_candidates as core_pruning_candidates,
+		compute_tag_strength as core_tag_strength,
+		retrieve_visual as core_retrieve_visual,
+		should_prune as core_should_prune, should_tag as core_should_tag,
+		ConsolidationState, EmotionalContext, PruningReason, VisualConfig, VisualMemory,
+		VisualRetrievalConfig, VisualRetrievalInput, VisualSource,
+	},
 };
 
 /// Association between two memories for spreading activation.
@@ -386,8 +394,520 @@ pub fn location_is_well_known(familiarity: f64, config: Option<JsLocationConfig>
 }
 
 // ============================================================================
+// Visual Memory
+// ============================================================================
+
+/// Where a visual memory originated.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsVisualSource {
+	/// Source type: "discord", "sms", "direct", "videoframe", "other"
+	pub source_type: String,
+}
+
+/// Emotional context of a visual memory.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsEmotionalContext {
+	/// Pleasant (+1) to unpleasant (-1)
+	pub valence: f64,
+	/// High activation (1) to low activation (0)
+	pub arousal: f64,
+}
+
+/// A visual memory with full metadata.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsVisualMemory {
+	/// Unique identifier
+	pub id: u32,
+	/// Short description (the "gist")
+	pub description: String,
+	/// Detailed description (optional)
+	pub detailed_description: Option<String>,
+	/// When captured
+	pub captured_at_ms: f64,
+	/// Last access timestamp
+	pub last_accessed_ms: f64,
+	/// Access count
+	pub access_count: u32,
+	/// Emotional valence (-1 to 1)
+	pub emotional_valence: f64,
+	/// Emotional arousal (0 to 1)
+	pub emotional_arousal: f64,
+	/// Significance score (0-1)
+	pub significance: f64,
+	/// Source type
+	pub source: String,
+	/// Who shared this
+	pub shared_by: Option<String>,
+	/// Video ID if frame
+	pub video_id: Option<String>,
+	/// Frame number
+	pub frame_number: Option<u32>,
+	/// Detected objects
+	pub objects: Vec<String>,
+	/// Tags
+	pub tags: Vec<String>,
+	/// Whether pinned
+	pub pinned: bool,
+}
+
+/// Configuration for visual memory operations.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsVisualConfig {
+	/// Significance threshold for tagging (default: 0.6)
+	pub tagging_significance_threshold: Option<f64>,
+	/// Emotional retention threshold (default: 0.7)
+	pub emotional_retention_threshold: Option<f64>,
+	/// How much emotion reduces decay (default: 0.5)
+	pub emotional_decay_reduction: Option<f64>,
+	/// Base decay rate (default: 0.05)
+	pub base_decay_rate: Option<f64>,
+	/// Days before decay (default: 14)
+	pub stale_threshold_days: Option<u32>,
+	/// Significance floor (default: 0.1)
+	pub significance_floor: Option<f64>,
+	/// Pruning threshold (default: 0.2)
+	pub pruning_threshold: Option<f64>,
+	/// Pruning stale days (default: 90)
+	pub pruning_stale_days: Option<u32>,
+	/// Preserve keyframes (default: true)
+	pub preserve_keyframes: Option<bool>,
+}
+
+/// Configuration for visual retrieval.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsVisualRetrievalConfig {
+	/// Decay rate (default: 0.5)
+	pub decay_rate: Option<f64>,
+	/// Activation threshold (default: 0.3)
+	pub activation_threshold: Option<f64>,
+	/// Noise parameter (default: 0.1)
+	pub noise_parameter: Option<f64>,
+	/// Spreading depth (default: 3)
+	pub spreading_depth: Option<u32>,
+	/// Spreading decay (default: 0.7)
+	pub spreading_decay: Option<f64>,
+	/// Min probability (default: 0.1)
+	pub min_probability: Option<f64>,
+	/// Max results (default: 10)
+	pub max_results: Option<u32>,
+	/// Bidirectional spreading (default: true)
+	pub bidirectional: Option<bool>,
+	/// Emotional boost (default: 0.3)
+	pub emotional_boost: Option<f64>,
+	/// Significance boost (default: 0.2)
+	pub significance_boost: Option<f64>,
+}
+
+/// Result from visual retrieval.
+#[napi(object)]
+pub struct JsVisualRetrievalCandidate {
+	/// Memory index
+	pub index: u32,
+	/// Base-level activation
+	pub base_level: f64,
+	/// Probe activation
+	pub probe_activation: f64,
+	/// Spreading activation
+	pub spreading: f64,
+	/// Emotional weight
+	pub emotional_weight: f64,
+	/// Significance boost applied
+	pub significance_boost: f64,
+	/// Total activation
+	pub total_activation: f64,
+	/// Retrieval probability
+	pub probability: f64,
+	/// Latency estimate (ms)
+	pub latency_ms: f64,
+}
+
+/// Consolidation state.
+#[napi(object)]
+pub struct JsVisualConsolidationState {
+	/// State: "fresh", "consolidating", "consolidated", "reconsolidating"
+	pub state: String,
+	/// Consolidation strength (0-1)
+	pub strength: f64,
+	/// Reactivation count
+	pub reactivation_count: u32,
+}
+
+/// Pruning candidate.
+#[napi(object)]
+pub struct JsPruningCandidate {
+	/// Memory index
+	pub index: u32,
+	/// Current significance
+	pub significance: f64,
+	/// Days since access
+	pub days_since_access: f64,
+	/// Reason: "lowsignificance", "stale", "duplicate", "lowquality"
+	pub reason: String,
+	/// Pruning score
+	pub score: f64,
+}
+
+/// Retrieve visual memories based on probe embedding.
+#[napi]
+pub fn visual_retrieve(
+	probe_embedding: Vec<f64>,
+	memory_embeddings: Vec<Vec<f64>>,
+	access_histories_ms: Vec<Vec<f64>>,
+	emotional_weights: Vec<f64>,
+	significance_scores: Vec<f64>,
+	current_time_ms: f64,
+	associations: Option<Vec<JsAssociation>>,
+	config: Option<JsVisualRetrievalConfig>,
+) -> Vec<JsVisualRetrievalCandidate> {
+	let config = js_visual_retrieval_config_to_core(config);
+
+	let associations: Vec<CoreAssociation> = associations
+		.unwrap_or_default()
+		.into_iter()
+		.map(|a| CoreAssociation {
+			source: a.source as usize,
+			target: a.target as usize,
+			forward_strength: a.forward_strength,
+			backward_strength: a.backward_strength,
+		})
+		.collect();
+
+	let input = VisualRetrievalInput {
+		probe_embedding: &probe_embedding,
+		memory_embeddings: &memory_embeddings,
+		access_histories_ms: &access_histories_ms,
+		emotional_weights: &emotional_weights,
+		significance_scores: &significance_scores,
+		associations: &associations,
+		current_time_ms,
+	};
+
+	let candidates = core_retrieve_visual(&input, &config);
+
+	candidates
+		.into_iter()
+		.map(|c| JsVisualRetrievalCandidate {
+			index: c.index as u32,
+			base_level: c.base_level,
+			probe_activation: c.probe_activation,
+			spreading: c.spreading,
+			emotional_weight: c.emotional_weight,
+			significance_boost: c.significance_boost,
+			total_activation: c.total_activation,
+			probability: c.probability,
+			latency_ms: c.latency_ms,
+		})
+		.collect()
+}
+
+/// Compute tag strength based on various factors.
+#[napi]
+pub fn visual_compute_tag_strength(
+	base_confidence: f64,
+	access_count: u32,
+	significance: f64,
+	config: Option<JsVisualConfig>,
+) -> f64 {
+	let cfg = js_visual_config_to_core(config);
+	core_tag_strength(base_confidence, access_count, significance, &cfg)
+}
+
+/// Check if a tag should be applied.
+#[napi]
+pub fn visual_should_tag(strength: f64, threshold: f64) -> bool {
+	core_should_tag(strength, threshold)
+}
+
+/// Check if a visual memory should be pruned.
+#[napi]
+pub fn visual_should_prune(
+	significance: f64,
+	days_since_access: f64,
+	is_pinned: bool,
+	is_keyframe: bool,
+	config: Option<JsVisualConfig>,
+) -> bool {
+	let cfg = js_visual_config_to_core(config);
+	core_should_prune(significance, days_since_access, is_pinned, is_keyframe, &cfg)
+}
+
+/// Compute pruning candidates from visual memories.
+#[napi]
+pub fn visual_compute_pruning_candidates(
+	memories: Vec<JsVisualMemory>,
+	current_time_ms: f64,
+	config: Option<JsVisualConfig>,
+) -> Vec<JsPruningCandidate> {
+	let cfg = js_visual_config_to_core(config);
+	let core_memories: Vec<VisualMemory> =
+		memories.into_iter().map(js_visual_memory_to_core).collect();
+
+	let candidates = core_pruning_candidates(&core_memories, current_time_ms, &cfg);
+
+	candidates
+		.into_iter()
+		.map(|c| JsPruningCandidate {
+			index: c.index as u32,
+			significance: c.significance,
+			days_since_access: c.days_since_access,
+			reason: pruning_reason_to_string(c.reason),
+			score: c.score,
+		})
+		.collect()
+}
+
+// ============================================================================
+// Video Frame Selection
+// ============================================================================
+
+/// A candidate frame for description.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsFrameCandidate {
+	/// Frame index in the video
+	pub index: u32,
+	/// Timestamp in seconds
+	pub timestamp_seconds: f64,
+	/// Whether this is a keyframe (I-frame)
+	pub is_keyframe: bool,
+	/// Whether this is a scene change
+	pub is_scene_change: bool,
+	/// Quality score (0-1)
+	pub quality_score: f64,
+}
+
+/// A transcript segment for context.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsTranscriptSegment {
+	/// Start timestamp in seconds
+	pub start_seconds: f64,
+	/// End timestamp in seconds
+	pub end_seconds: f64,
+	/// The transcribed text
+	pub text: String,
+}
+
+/// Configuration for frame description prompts.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsFrameDescriptionConfig {
+	/// Whether to include emotional assessment
+	pub include_emotion: Option<bool>,
+	/// Whether to detect and list objects
+	pub detect_objects: Option<bool>,
+	/// Maximum description length guidance
+	pub max_description_length: Option<u32>,
+}
+
+/// Select frames for description, respecting rate limits.
+///
+/// Prioritizes: keyframes, scene changes, even distribution, transcript moments.
+///
+/// # Returns
+///
+/// Indices of selected frames in chronological order.
+#[napi]
+pub fn video_select_frames(
+	frames: Vec<JsFrameCandidate>,
+	max_frames: u32,
+	transcript_segments: Option<Vec<JsTranscriptSegment>>,
+) -> Vec<u32> {
+	use lucid_core::visual::{select_frames_for_description, FrameCandidate, TranscriptSegment};
+
+	let core_frames: Vec<FrameCandidate> = frames
+		.into_iter()
+		.map(|f| FrameCandidate {
+			index: f.index as usize,
+			timestamp_seconds: f.timestamp_seconds,
+			is_keyframe: f.is_keyframe,
+			is_scene_change: f.is_scene_change,
+			quality_score: f.quality_score,
+		})
+		.collect();
+
+	let core_segments: Option<Vec<TranscriptSegment>> = transcript_segments.map(|segs| {
+		segs.into_iter()
+			.map(|s| TranscriptSegment {
+				start_seconds: s.start_seconds,
+				end_seconds: s.end_seconds,
+				text: s.text,
+			})
+			.collect()
+	});
+
+	let result = select_frames_for_description(
+		&core_frames,
+		max_frames as usize,
+		core_segments.as_deref(),
+	);
+
+	result.into_iter().map(|i| i as u32).collect()
+}
+
+/// Generate a prompt for Claude Haiku to describe a video frame.
+///
+/// Returns a prompt string to send to Claude Haiku along with the image.
+#[napi]
+pub fn video_prepare_for_subagent(
+	timestamp_seconds: f64,
+	video_duration_seconds: f64,
+	transcript_near_frame: Option<String>,
+	is_scene_change: bool,
+	shared_by: Option<String>,
+	config: Option<JsFrameDescriptionConfig>,
+) -> String {
+	use lucid_core::visual::{prepare_frame_description_prompt, FrameDescriptionConfig};
+
+	let core_config = config.map_or_else(FrameDescriptionConfig::default, |c| {
+		let default = FrameDescriptionConfig::default();
+		FrameDescriptionConfig {
+			include_emotion: c.include_emotion.unwrap_or(default.include_emotion),
+			detect_objects: c.detect_objects.unwrap_or(default.detect_objects),
+			max_description_length: c
+				.max_description_length
+				.map_or(default.max_description_length, |n| n as usize),
+		}
+	});
+
+	prepare_frame_description_prompt(
+		timestamp_seconds,
+		video_duration_seconds,
+		transcript_near_frame.as_deref(),
+		is_scene_change,
+		shared_by.as_deref(),
+		&core_config,
+	)
+}
+
+/// Generate a synthesis prompt for combining frame descriptions.
+#[napi]
+pub fn video_prepare_synthesis_prompt(
+	descriptions: Vec<String>,
+	valences: Vec<f64>,
+	arousals: Vec<f64>,
+	significances: Vec<f64>,
+	timestamps: Vec<f64>,
+	transcript: Option<String>,
+	video_duration_seconds: f64,
+) -> String {
+	use lucid_core::visual::{prepare_synthesis_prompt, FrameDescriptionResult};
+
+	let frame_descriptions: Vec<FrameDescriptionResult> = descriptions
+		.into_iter()
+		.zip(valences)
+		.zip(arousals)
+		.zip(significances)
+		.map(|(((desc, val), aro), sig)| FrameDescriptionResult {
+			description: desc,
+			objects: vec![],
+			valence: val,
+			arousal: aro,
+			significance: sig,
+		})
+		.collect();
+
+	prepare_synthesis_prompt(
+		&frame_descriptions,
+		&timestamps,
+		transcript.as_deref(),
+		video_duration_seconds,
+	)
+}
+
+// ============================================================================
 // Type Conversions
 // ============================================================================
+
+fn js_visual_config_to_core(js: Option<JsVisualConfig>) -> VisualConfig {
+	js.map_or_else(VisualConfig::default, |js| {
+		let default = VisualConfig::default();
+		VisualConfig {
+			tagging_significance_threshold: js
+				.tagging_significance_threshold
+				.unwrap_or(default.tagging_significance_threshold),
+			emotional_retention_threshold: js
+				.emotional_retention_threshold
+				.unwrap_or(default.emotional_retention_threshold),
+			emotional_decay_reduction: js
+				.emotional_decay_reduction
+				.unwrap_or(default.emotional_decay_reduction),
+			base_decay_rate: js.base_decay_rate.unwrap_or(default.base_decay_rate),
+			stale_threshold_days: js
+				.stale_threshold_days
+				.unwrap_or(default.stale_threshold_days),
+			significance_floor: js.significance_floor.unwrap_or(default.significance_floor),
+			pruning_threshold: js.pruning_threshold.unwrap_or(default.pruning_threshold),
+			pruning_stale_days: js.pruning_stale_days.unwrap_or(default.pruning_stale_days),
+			preserve_keyframes: js.preserve_keyframes.unwrap_or(default.preserve_keyframes),
+		}
+	})
+}
+
+fn js_visual_retrieval_config_to_core(js: Option<JsVisualRetrievalConfig>) -> VisualRetrievalConfig {
+	js.map_or_else(VisualRetrievalConfig::default, |js| {
+		let default = VisualRetrievalConfig::default();
+		VisualRetrievalConfig {
+			decay_rate: js.decay_rate.unwrap_or(default.decay_rate),
+			activation_threshold: js
+				.activation_threshold
+				.unwrap_or(default.activation_threshold),
+			noise_parameter: js.noise_parameter.unwrap_or(default.noise_parameter),
+			spreading_depth: js.spreading_depth.unwrap_or(default.spreading_depth as u32) as usize,
+			spreading_decay: js.spreading_decay.unwrap_or(default.spreading_decay),
+			min_probability: js.min_probability.unwrap_or(default.min_probability),
+			max_results: js.max_results.unwrap_or(default.max_results as u32) as usize,
+			bidirectional: js.bidirectional.unwrap_or(default.bidirectional),
+			emotional_boost: js.emotional_boost.unwrap_or(default.emotional_boost),
+			significance_boost: js.significance_boost.unwrap_or(default.significance_boost),
+		}
+	})
+}
+
+fn parse_visual_source(s: &str) -> VisualSource {
+	match s.to_lowercase().as_str() {
+		"discord" => VisualSource::Discord,
+		"sms" => VisualSource::Sms,
+		"direct" => VisualSource::Direct,
+		"videoframe" => VisualSource::VideoFrame,
+		_ => VisualSource::Other,
+	}
+}
+
+fn js_visual_memory_to_core(js: JsVisualMemory) -> VisualMemory {
+	VisualMemory {
+		id: js.id,
+		description: js.description,
+		detailed_description: js.detailed_description,
+		embedding: vec![], // Embeddings are passed separately
+		captured_at_ms: js.captured_at_ms,
+		last_accessed_ms: js.last_accessed_ms,
+		access_count: js.access_count,
+		emotional_context: EmotionalContext::new(js.emotional_valence, js.emotional_arousal),
+		significance: js.significance,
+		source: parse_visual_source(&js.source),
+		shared_by: js.shared_by,
+		video_id: js.video_id,
+		frame_number: js.frame_number,
+		objects: js.objects,
+		tags: js.tags,
+		pinned: js.pinned,
+	}
+}
+
+fn pruning_reason_to_string(reason: PruningReason) -> String {
+	match reason {
+		PruningReason::LowSignificance => "lowsignificance".to_string(),
+		PruningReason::Stale => "stale".to_string(),
+		PruningReason::Duplicate => "duplicate".to_string(),
+		PruningReason::LowQuality => "lowquality".to_string(),
+	}
+}
 
 fn js_config_to_core(js: Option<JsLocationConfig>) -> LocationConfig {
 	js.map_or_else(LocationConfig::default, |js| {

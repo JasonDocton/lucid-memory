@@ -5,6 +5,142 @@ All notable changes to Lucid Memory will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-01-31
+
+### Added
+
+#### Visual Memory
+
+Claude now sees and remembers images and videos you share. When you share media in your conversation, Claude automatically processes and remembers it—not by storing the file, but by understanding and describing what it sees and hears.
+
+**Key features:**
+
+- **Images** — Claude sees the image, describes it, and stores that understanding with semantic embeddings
+- **Videos** — Rust parallel processing extracts frames and transcribes audio simultaneously; Claude synthesizes both into a holistic memory
+- **Retrieval** — Visual memories are retrieved via the same cognitive model as text memories (ACT-R activation + semantic similarity)
+- **Automatic** — No commands needed; share media, Claude remembers
+
+**Supported formats:**
+
+| Type | Formats |
+|------|---------|
+| Images | jpg, jpeg, png, gif, webp, heic, heif |
+| Videos | mp4, mov, avi, mkv, webm, m4v |
+| URLs | YouTube, Vimeo, youtu.be, direct media links |
+| Paths | Simple, quoted (spaces), ~ expansion |
+
+#### Rust Perception Pipeline
+
+New `lucid-perception` crate for high-performance video processing:
+
+- **Parallel processing** — Frame extraction and audio transcription run simultaneously via `tokio::join!`
+- **Scene detection** — Perceptual hashing identifies scene changes for intelligent frame selection
+- **Whisper integration** — Audio transcription captures what was said, not just what was shown
+- **NAPI bindings** — Full pipeline accessible from TypeScript via `@lucid-memory/perception`
+
+**New crates:**
+
+```
+crates/lucid-perception/           # Core video processing
+crates/lucid-perception-napi/      # NAPI bindings
+packages/lucid-perception/         # NPM package
+```
+
+**Key functions:**
+
+| Function | Purpose |
+|----------|---------|
+| `videoProcess()` | Full parallel pipeline (frames + audio) |
+| `videoExtractFrames()` | Frame extraction with scene detection |
+| `videoTranscribe()` | Whisper-based audio transcription |
+| `videoGetMetadata()` | Video metadata extraction |
+
+#### New MCP Tools
+
+4 new visual memory tools added to the MCP server:
+
+| Tool | Purpose |
+|------|---------|
+| `visual_store` | Store visual memory (description + metadata) |
+| `visual_search` | Semantic search over visual memories |
+| `video_process` | Process video with Rust parallel pipeline |
+| `video_cleanup` | Clean up temporary processing files |
+
+#### Enhanced Hook Media Detection
+
+The pre-prompt hook now detects media in various formats:
+
+- Simple paths: `/path/to/image.jpg`
+- Quoted paths with spaces: `"/path/to/my file.jpg"`
+- Tilde expansion: `~/Desktop/photo.jpg`
+- Image URLs: `https://example.com/photo.jpg`
+- Video URLs: YouTube, Vimeo, youtu.be, direct links
+
+### Changed
+
+- **Context retrieval now includes visual memories** — `getContextWithVisuals()` returns both text and visual memories with configurable token budget allocation
+- **CLI context command outputs visual memories** — Shows `[Visual, image]` and `[Visual, video]` entries alongside text memories
+- **Background embedding processor handles visual memories** — `startBackgroundVisualEmbeddingProcessor()` generates embeddings for new visual memories
+
+### Technical Details
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Pre-prompt Hook                                                │
+│  - Detects media paths/URLs in user message                     │
+│  - Outputs <lucid-visual-memory> instructions                   │
+│  - Retrieves visual memories via CLI context command            │
+├─────────────────────────────────────────────────────────────────┤
+│  MCP Server (TypeScript)                                        │
+│  - visual_store, visual_search, video_process tools             │
+│  - Background embedding processor for visual memories           │
+├─────────────────────────────────────────────────────────────────┤
+│  Rust Perception (lucid-perception)                             │
+│  - Parallel frame extraction + audio transcription              │
+│  - Scene detection via perceptual hashing                       │
+│  - Whisper integration for transcription                        │
+├─────────────────────────────────────────────────────────────────┤
+│  Storage (SQLite)                                               │
+│  - visual_memories table (descriptions, not files)              │
+│  - visual_embeddings table (semantic vectors)                   │
+│  - visual_access_history (ACT-R activation)                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Database Schema
+
+```sql
+visual_memories (
+  id, description, original_path, media_type,
+  objects, emotional_valence, emotional_arousal,
+  significance, shared_by, source, received_at,
+  last_accessed, access_count, created_at
+)
+
+visual_embeddings (
+  visual_memory_id, vector, model
+)
+
+visual_access_history (
+  id, visual_memory_id, accessed_at
+)
+```
+
+#### Test Coverage
+
+| Suite | Tests | Description |
+|-------|-------|-------------|
+| TypeScript | 45 | Storage, retrieval, integration |
+| Rust lucid-core | 33 | Core algorithms including visual |
+| Rust lucid-napi | 8 | NAPI binding tests |
+| Rust lucid-perception | 14 | Video processing pipeline |
+| Doc tests | 5 | Documentation examples |
+| **Total** | **105** | |
+
+---
+
 ## [0.2.0] - 2025-01-30
 
 ### Added

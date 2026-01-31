@@ -300,6 +300,26 @@ switch ($EmbedChoice) {
 }
 Show-Progress  # Step 4: Embedding provider
 
+# === Download Whisper Model for Transcription ===
+
+$LucidModels = "$LucidDir\models"
+New-Item -ItemType Directory -Force -Path $LucidModels | Out-Null
+
+$WhisperModel = "$LucidModels\ggml-base.en.bin"
+if (-not (Test-Path $WhisperModel)) {
+    Write-Host ""
+    Write-Host "Downloading Whisper model for video transcription (74MB)..."
+    try {
+        Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" -OutFile $WhisperModel
+        Write-Success "Whisper model downloaded"
+    } catch {
+        Write-Warn "Could not download Whisper model - video transcription will be unavailable"
+        Write-Host "  To download manually: Invoke-WebRequest -Uri 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin' -OutFile '$WhisperModel'"
+    }
+} else {
+    Write-Success "Whisper model already present"
+}
+
 # === Configure Claude Code ===
 
 Write-Host ""
