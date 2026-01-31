@@ -26,8 +26,9 @@ export function generateGist(content: string, maxLength = 150): string {
 		return cleaned.slice(0, maxLength)
 	}
 
-	// Get first meaningful sentence
-	const firstSentence = sentences.find((s) => s.length > 20) ?? sentences[0]
+	// Get first meaningful sentence (we know sentences.length > 0 from early return)
+	const firstSentence =
+		sentences.find((s) => s.length > 20) ?? sentences[0] ?? cleaned
 
 	// If first sentence fits, use it
 	if (firstSentence.length <= maxLength) {

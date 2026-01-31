@@ -768,7 +768,9 @@ server.tool(
 			const metadata = await getVideoMetadata(videoPath)
 			const allFrames = await extractFrames(videoPath, workDir, { fps: 1 })
 			const selectedIndices = selectFrames(allFrames, maxFrames, null)
-			const selectedFrames = selectedIndices.map((i) => allFrames[i])
+			const selectedFrames = selectedIndices
+				.map((i) => allFrames[i])
+				.filter((f): f is NonNullable<typeof f> => f !== undefined)
 
 			return {
 				content: [

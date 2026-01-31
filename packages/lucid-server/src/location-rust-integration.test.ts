@@ -409,7 +409,7 @@ describe("Rust Performance Characteristics", () => {
 		const start = performance.now()
 
 		for (let i = 0; i < iterations; i++) {
-			native.locationInferActivity(contexts[i % 3], null, null)
+			native.locationInferActivity(contexts[i % 3] ?? "", null, null)
 		}
 
 		const elapsed = performance.now() - start

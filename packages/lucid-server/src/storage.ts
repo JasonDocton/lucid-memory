@@ -1197,10 +1197,11 @@ export class LucidStorage {
 				: 1
 
 		// Upsert in both directions for bidirectional association
-		for (const [src, tgt] of [
+		const pairs: [string, string][] = [
 			[sourceId, targetId],
 			[targetId, sourceId],
-		]) {
+		]
+		for (const [src, tgt] of pairs) {
 			this.db
 				.prepare(`
         INSERT INTO location_associations

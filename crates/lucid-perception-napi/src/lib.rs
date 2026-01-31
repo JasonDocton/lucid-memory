@@ -199,7 +199,11 @@ pub struct JsPipelineConfig {
 // Functions
 // ============================================================================
 
-/// Check if FFmpeg is available.
+/// Check if `FFmpeg` is available.
+///
+/// # Errors
+///
+/// Returns `Ok(false)` if `FFmpeg` is not found; does not error.
 #[napi]
 pub async fn video_check_ffmpeg() -> Result<bool> {
 	match lucid_perception::check_ffmpeg().await {
@@ -209,6 +213,10 @@ pub async fn video_check_ffmpeg() -> Result<bool> {
 }
 
 /// Get video metadata.
+///
+/// # Errors
+///
+/// Returns an error if the video cannot be read or `FFmpeg` fails.
 #[napi]
 pub async fn video_get_metadata(video_path: String) -> Result<JsVideoMetadata> {
 	let metadata = lucid_perception::get_video_metadata(&video_path)
@@ -219,6 +227,10 @@ pub async fn video_get_metadata(video_path: String) -> Result<JsVideoMetadata> {
 }
 
 /// Extract frames from a video.
+///
+/// # Errors
+///
+/// Returns an error if frame extraction fails.
 #[napi]
 pub async fn video_extract_frames(
 	video_path: String,
@@ -234,6 +246,10 @@ pub async fn video_extract_frames(
 }
 
 /// Transcribe audio from a video.
+///
+/// # Errors
+///
+/// Returns an error if transcription fails or the model is unavailable.
 #[napi]
 pub async fn video_transcribe(
 	video_path: String,
@@ -249,6 +265,10 @@ pub async fn video_transcribe(
 }
 
 /// Full video processing pipeline.
+///
+/// # Errors
+///
+/// Returns an error if any pipeline stage fails.
 #[napi]
 pub async fn video_process(
 	video_path: String,
@@ -266,11 +286,9 @@ pub async fn video_process(
 /// Check if Whisper model is available.
 #[napi]
 pub fn video_is_model_available(model_path: Option<String>) -> bool {
-	let config = model_path.map_or_else(TranscriptionConfig::default, |path| {
-		TranscriptionConfig {
-			model_path: PathBuf::from(path),
-			..Default::default()
-		}
+	let config = model_path.map_or_else(TranscriptionConfig::default, |path| TranscriptionConfig {
+		model_path: PathBuf::from(path),
+		..Default::default()
 	});
 
 	lucid_perception::transcribe::is_model_available(&config)
@@ -303,7 +321,7 @@ fn metadata_to_js(m: VideoMetadata) -> JsVideoMetadata {
 	JsVideoMetadata {
 		duration_seconds: m.duration_seconds,
 		frame_rate: m.frame_rate,
-		frame_count: m.frame_count as i64,
+		frame_count: i64::try_from(m.frame_count).unwrap_or(i64::MAX),
 		width: m.width,
 		height: m.height,
 		codec: m.codec,
@@ -343,7 +361,7 @@ fn transcription_to_js(t: TranscriptionResult) -> JsTranscriptionResult {
 				start_ms: s.start_ms,
 				end_ms: s.end_ms,
 				text: s.text,
-				confidence: s.confidence.map(|c| c as f64),
+				confidence: s.confidence.map(f64::from),
 			})
 			.collect(),
 		detected_language: t.detected_language,
@@ -358,12 +376,13 @@ fn processing_output_to_js(o: VideoProcessingOutput) -> JsVideoProcessingOutput 
 		transcript: o.transcript.map(transcription_to_js),
 		no_audio: o.no_audio,
 		stats: JsProcessingStats {
-			frames_extracted: o.stats.frames_extracted as u32,
-			scene_changes: o.stats.scene_changes as u32,
-			duplicates: o.stats.duplicates as u32,
-			extraction_time_ms: o.stats.extraction_time_ms as i64,
-			scene_detection_time_ms: o.stats.scene_detection_time_ms as i64,
-			transcription_time_ms: o.stats.transcription_time_ms as i64,
+			frames_extracted: u32::try_from(o.stats.frames_extracted).unwrap_or(u32::MAX),
+			scene_changes: u32::try_from(o.stats.scene_changes).unwrap_or(u32::MAX),
+			duplicates: u32::try_from(o.stats.duplicates).unwrap_or(u32::MAX),
+			extraction_time_ms: i64::try_from(o.stats.extraction_time_ms).unwrap_or(i64::MAX),
+			scene_detection_time_ms: i64::try_from(o.stats.scene_detection_time_ms)
+				.unwrap_or(i64::MAX),
+			transcription_time_ms: i64::try_from(o.stats.transcription_time_ms).unwrap_or(i64::MAX),
 		},
 	}
 }
@@ -376,7 +395,7 @@ fn js_video_config_to_core(js: Option<JsVideoConfig>) -> VideoConfig {
 				.output_dir
 				.map(PathBuf::from)
 				.unwrap_or(default.output_dir),
-			max_frames: js.max_frames.unwrap_or(default.max_frames as u32) as usize,
+			max_frames: js.max_frames.map_or(default.max_frames, |m| m as usize),
 			interval_seconds: js.interval_seconds.unwrap_or(default.interval_seconds),
 			quality: js.quality.unwrap_or(default.quality),
 			format: js.format.as_deref().map_or(default.format, |s| match s {

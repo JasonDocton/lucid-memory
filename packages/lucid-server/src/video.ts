@@ -459,7 +459,7 @@ export function synthesizeDescription(
 	const frameSummary = frameDescriptions
 		.map(
 			(fd, i) =>
-				`Frame ${i + 1} (${Math.round(timestamps[i])}s): ${fd.description}`
+				`Frame ${i + 1} (${Math.round(timestamps[i] ?? 0)}s): ${fd.description}`
 		)
 		.join("\n")
 

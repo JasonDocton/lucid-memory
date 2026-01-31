@@ -180,7 +180,11 @@ export class EmbeddingClient {
 
 	private async embedOpenAI(text: string): Promise<EmbeddingResult> {
 		const results = await this.embedOpenAIBatch([text])
-		return results[0]
+		const result = results[0]
+		if (!result) {
+			throw new Error("No embedding result returned")
+		}
+		return result
 	}
 
 	private async embedOpenAIBatch(texts: string[]): Promise<EmbeddingResult[]> {
@@ -289,9 +293,11 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 	let normB = 0
 
 	for (let i = 0; i < a.length; i++) {
-		dotProduct += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
+		const ai = a[i] ?? 0
+		const bi = b[i] ?? 0
+		dotProduct += ai * bi
+		normA += ai * ai
+		normB += bi * bi
 	}
 
 	normA = Math.sqrt(normA)

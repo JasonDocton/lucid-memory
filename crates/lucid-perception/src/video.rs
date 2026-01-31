@@ -532,8 +532,7 @@ async fn extract_keyframes_internal(
 					// Estimate timestamp based on frame number
 					// This is approximate since FFmpeg doesn't output timestamps directly
 					#[allow(clippy::cast_precision_loss)]
-					let timestamp = if metadata.frame_rate > 0.0 && metadata.duration_seconds > 0.0
-					{
+					let timestamp = if metadata.frame_rate > 0.0 && metadata.duration_seconds > 0.0 {
 						// Rough estimate: keyframes are roughly evenly distributed
 						let keyframe_interval =
 							metadata.duration_seconds / (frames.len() + 1) as f64;

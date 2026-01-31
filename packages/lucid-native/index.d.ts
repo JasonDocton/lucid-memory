@@ -5,344 +5,383 @@
  *
  * B(m) = ln[Σ(t_k)^(-d)]
  */
-export declare function computeBaseLevel(accessTimesMs: Array<number>, currentTimeMs: number, decay: number): number
+export declare function computeBaseLevel(
+	accessTimesMs: Array<number>,
+	currentTimeMs: number,
+	decay: number
+): number
 
 /** Compute surprise (prediction error) between expected and actual. */
-export declare function computeSurprise(expectedEmbedding: Array<number>, actualEmbedding: Array<number>, memoryAgeDays: number, memoryStrength: number, baseThreshold: number): number
+export declare function computeSurprise(
+	expectedEmbedding: Array<number>,
+	actualEmbedding: Array<number>,
+	memoryAgeDays: number,
+	memoryStrength: number,
+	baseThreshold: number
+): number
 
 /** Compute cosine similarity between two vectors. */
-export declare function cosineSimilarity(a: Array<number>, b: Array<number>): number
+export declare function cosineSimilarity(
+	a: Array<number>,
+	b: Array<number>
+): number
 
 /** Batch compute cosine similarity between probe and all memories. */
-export declare function cosineSimilarityBatch(probe: Array<number>, memories: Array<Array<number>>): Array<number>
+export declare function cosineSimilarityBatch(
+	probe: Array<number>,
+	memories: Array<Array<number>>
+): Array<number>
 
 /** Result of activity type inference. */
 export interface JsActivityInference {
-  /** The inferred activity type (reading, writing, debugging, refactoring, reviewing, unknown) */
-  activityType: string
-  /** How it was inferred (explicit, keyword, tool, default) */
-  source: string
-  /** Confidence level (0-1) */
-  confidence: number
+	/** The inferred activity type (reading, writing, debugging, refactoring, reviewing, unknown) */
+	activityType: string
+	/** How it was inferred (explicit, keyword, tool, default) */
+	source: string
+	/** Confidence level (0-1) */
+	confidence: number
 }
 
 /** Associated location result. */
 export interface JsAssociatedLocation {
-  /** Location index */
-  locationId: number
-  /** Association strength */
-  strength: number
+	/** Location index */
+	locationId: number
+	/** Association strength */
+	strength: number
 }
 
 /** Association between two memories for spreading activation. */
 export interface JsAssociation {
-  source: number
-  target: number
-  forwardStrength: number
-  backwardStrength: number
+	source: number
+	target: number
+	forwardStrength: number
+	backwardStrength: number
 }
 
 /** Emotional context of a visual memory. */
 export interface JsEmotionalContext {
-  /** Pleasant (+1) to unpleasant (-1) */
-  valence: number
-  /** High activation (1) to low activation (0) */
-  arousal: number
+	/** Pleasant (+1) to unpleasant (-1) */
+	valence: number
+	/** High activation (1) to low activation (0) */
+	arousal: number
 }
 
 /** A candidate frame for description. */
 export interface JsFrameCandidate {
-  /** Frame index in the video */
-  index: number
-  /** Timestamp in seconds */
-  timestampSeconds: number
-  /** Whether this is a keyframe (I-frame) */
-  isKeyframe: boolean
-  /** Whether this is a scene change */
-  isSceneChange: boolean
-  /** Quality score (0-1) */
-  qualityScore: number
+	/** Frame index in the video */
+	index: number
+	/** Timestamp in seconds */
+	timestampSeconds: number
+	/** Whether this is a keyframe (I-frame) */
+	isKeyframe: boolean
+	/** Whether this is a scene change */
+	isSceneChange: boolean
+	/** Quality score (0-1) */
+	qualityScore: number
 }
 
 /** Configuration for frame description prompts. */
 export interface JsFrameDescriptionConfig {
-  /** Whether to include emotional assessment */
-  includeEmotion?: boolean
-  /** Whether to detect and list objects */
-  detectObjects?: boolean
-  /** Maximum description length guidance */
-  maxDescriptionLength?: number
+	/** Whether to include emotional assessment */
+	includeEmotion?: boolean
+	/** Whether to detect and list objects */
+	detectObjects?: boolean
+	/** Maximum description length guidance */
+	maxDescriptionLength?: number
 }
 
 /** Association between two locations. */
 export interface JsLocationAssociation {
-  /** Source location index */
-  source: number
-  /** Target location index */
-  target: number
-  /** Association strength (0-1) */
-  strength: number
-  /** Number of co-accesses */
-  coAccessCount: number
+	/** Source location index */
+	source: number
+	/** Target location index */
+	target: number
+	/** Association strength (0-1) */
+	strength: number
+	/** Number of co-accesses */
+	coAccessCount: number
 }
 
 /** Configuration for location operations. */
 export interface JsLocationConfig {
-  /** Familiarity curve coefficient (default: 0.1) */
-  familiarityK?: number
-  /** Days before decay begins (default: 30) */
-  staleThresholdDays?: number
-  /** Maximum decay rate (default: 0.10) */
-  maxDecayRate?: number
-  /** How much familiarity reduces decay (default: 0.8) */
-  decayDampening?: number
-  /** Minimum familiarity floor (default: 0.1) */
-  baseFloor?: number
-  /** Extra floor for well-known locations (default: 0.4) */
-  stickyBonus?: number
-  /** Threshold for "well-known" (default: 0.7) */
-  wellKnownThreshold?: number
-  /** Multiplier: task + same activity (default: 5.0) */
-  taskSameActivityMultiplier?: number
-  /** Multiplier: task + different activity (default: 3.0) */
-  taskDiffActivityMultiplier?: number
-  /** Multiplier: time + same activity (default: 2.0) */
-  timeSameActivityMultiplier?: number
-  /** Multiplier: time + different activity (default: 1.0) */
-  timeDiffActivityMultiplier?: number
-  /** Backward strength factor (default: 0.7) */
-  backwardStrengthFactor?: number
+	/** Familiarity curve coefficient (default: 0.1) */
+	familiarityK?: number
+	/** Days before decay begins (default: 30) */
+	staleThresholdDays?: number
+	/** Maximum decay rate (default: 0.10) */
+	maxDecayRate?: number
+	/** How much familiarity reduces decay (default: 0.8) */
+	decayDampening?: number
+	/** Minimum familiarity floor (default: 0.1) */
+	baseFloor?: number
+	/** Extra floor for well-known locations (default: 0.4) */
+	stickyBonus?: number
+	/** Threshold for "well-known" (default: 0.7) */
+	wellKnownThreshold?: number
+	/** Multiplier: task + same activity (default: 5.0) */
+	taskSameActivityMultiplier?: number
+	/** Multiplier: task + different activity (default: 3.0) */
+	taskDiffActivityMultiplier?: number
+	/** Multiplier: time + same activity (default: 2.0) */
+	timeSameActivityMultiplier?: number
+	/** Multiplier: time + different activity (default: 1.0) */
+	timeDiffActivityMultiplier?: number
+	/** Backward strength factor (default: 0.7) */
+	backwardStrengthFactor?: number
 }
 
 /** A location (file) with familiarity metrics. */
 export interface JsLocationIntuition {
-  /** Index in the location array */
-  id: number
-  /** Familiarity level (0-1) */
-  familiarity: number
-  /** Number of times accessed */
-  accessCount: number
-  /** Number of searches avoided */
-  searchesSaved: number
-  /** Last access timestamp (ms) */
-  lastAccessedMs: number
-  /** Whether pinned (immune to decay) */
-  pinned: boolean
+	/** Index in the location array */
+	id: number
+	/** Familiarity level (0-1) */
+	familiarity: number
+	/** Number of times accessed */
+	accessCount: number
+	/** Number of searches avoided */
+	searchesSaved: number
+	/** Last access timestamp (ms) */
+	lastAccessedMs: number
+	/** Whether pinned (immune to decay) */
+	pinned: boolean
 }
 
 /** Pruning candidate. */
 export interface JsPruningCandidate {
-  /** Memory index */
-  index: number
-  /** Current significance */
-  significance: number
-  /** Days since access */
-  daysSinceAccess: number
-  /** Reason: "lowsignificance", "stale", "duplicate", "lowquality" */
-  reason: string
-  /** Pruning score */
-  score: number
+	/** Memory index */
+	index: number
+	/** Current significance */
+	significance: number
+	/** Days since access */
+	daysSinceAccess: number
+	/** Reason: "lowsignificance", "stale", "duplicate", "lowquality" */
+	reason: string
+	/** Pruning score */
+	score: number
 }
 
 /** Result candidate from retrieval. */
 export interface JsRetrievalCandidate {
-  /** Memory index */
-  index: number
-  /** Base-level activation from access history */
-  baseLevel: number
-  /** Probe-trace activation (cubed similarity) */
-  probeActivation: number
-  /** Spreading activation from associated memories */
-  spreading: number
-  /** Emotional weight factor */
-  emotionalWeight: number
-  /** Combined total activation */
-  totalActivation: number
-  /** Retrieval probability (0-1) */
-  probability: number
-  /** Estimated retrieval latency (ms) */
-  latencyMs: number
+	/** Memory index */
+	index: number
+	/** Base-level activation from access history */
+	baseLevel: number
+	/** Probe-trace activation (cubed similarity) */
+	probeActivation: number
+	/** Spreading activation from associated memories */
+	spreading: number
+	/** Emotional weight factor */
+	emotionalWeight: number
+	/** Combined total activation */
+	totalActivation: number
+	/** Retrieval probability (0-1) */
+	probability: number
+	/** Estimated retrieval latency (ms) */
+	latencyMs: number
 }
 
 /** Configuration for retrieval. */
 export interface JsRetrievalConfig {
-  /** Decay rate for base-level activation (default: 0.5) */
-  decayRate?: number
-  /** Retrieval threshold (default: 0.3) */
-  activationThreshold?: number
-  /** Noise parameter (default: 0.1) */
-  noiseParameter?: number
-  /** Spreading activation depth (default: 3) */
-  spreadingDepth?: number
-  /** Spreading decay per hop (default: 0.7) */
-  spreadingDecay?: number
-  /** Minimum probability to include (default: 0.1) */
-  minProbability?: number
-  /** Maximum results to return (default: 10) */
-  maxResults?: number
-  /** Whether to spread bidirectionally (default: true) */
-  bidirectional?: boolean
+	/** Decay rate for base-level activation (default: 0.5) */
+	decayRate?: number
+	/** Retrieval threshold (default: 0.3) */
+	activationThreshold?: number
+	/** Noise parameter (default: 0.1) */
+	noiseParameter?: number
+	/** Spreading activation depth (default: 3) */
+	spreadingDepth?: number
+	/** Spreading decay per hop (default: 0.7) */
+	spreadingDecay?: number
+	/** Minimum probability to include (default: 0.1) */
+	minProbability?: number
+	/** Maximum results to return (default: 10) */
+	maxResults?: number
+	/** Whether to spread bidirectionally (default: true) */
+	bidirectional?: boolean
 }
 
 /** A transcript segment for context. */
 export interface JsTranscriptSegment {
-  /** Start timestamp in seconds */
-  startSeconds: number
-  /** End timestamp in seconds */
-  endSeconds: number
-  /** The transcribed text */
-  text: string
+	/** Start timestamp in seconds */
+	startSeconds: number
+	/** End timestamp in seconds */
+	endSeconds: number
+	/** The transcribed text */
+	text: string
 }
 
 /** Configuration for visual memory operations. */
 export interface JsVisualConfig {
-  /** Significance threshold for tagging (default: 0.6) */
-  taggingSignificanceThreshold?: number
-  /** Emotional retention threshold (default: 0.7) */
-  emotionalRetentionThreshold?: number
-  /** How much emotion reduces decay (default: 0.5) */
-  emotionalDecayReduction?: number
-  /** Base decay rate (default: 0.05) */
-  baseDecayRate?: number
-  /** Days before decay (default: 14) */
-  staleThresholdDays?: number
-  /** Significance floor (default: 0.1) */
-  significanceFloor?: number
-  /** Pruning threshold (default: 0.2) */
-  pruningThreshold?: number
-  /** Pruning stale days (default: 90) */
-  pruningStaleDays?: number
-  /** Preserve keyframes (default: true) */
-  preserveKeyframes?: boolean
+	/** Significance threshold for tagging (default: 0.6) */
+	taggingSignificanceThreshold?: number
+	/** Emotional retention threshold (default: 0.7) */
+	emotionalRetentionThreshold?: number
+	/** How much emotion reduces decay (default: 0.5) */
+	emotionalDecayReduction?: number
+	/** Base decay rate (default: 0.05) */
+	baseDecayRate?: number
+	/** Days before decay (default: 14) */
+	staleThresholdDays?: number
+	/** Significance floor (default: 0.1) */
+	significanceFloor?: number
+	/** Pruning threshold (default: 0.2) */
+	pruningThreshold?: number
+	/** Pruning stale days (default: 90) */
+	pruningStaleDays?: number
+	/** Preserve keyframes (default: true) */
+	preserveKeyframes?: boolean
 }
 
 /** Consolidation state. */
 export interface JsVisualConsolidationState {
-  /** State: "fresh", "consolidating", "consolidated", "reconsolidating" */
-  state: string
-  /** Consolidation strength (0-1) */
-  strength: number
-  /** Reactivation count */
-  reactivationCount: number
+	/** State: "fresh", "consolidating", "consolidated", "reconsolidating" */
+	state: string
+	/** Consolidation strength (0-1) */
+	strength: number
+	/** Reactivation count */
+	reactivationCount: number
 }
 
 /** A visual memory with full metadata. */
 export interface JsVisualMemory {
-  /** Unique identifier */
-  id: number
-  /** Short description (the "gist") */
-  description: string
-  /** Detailed description (optional) */
-  detailedDescription?: string
-  /** When captured */
-  capturedAtMs: number
-  /** Last access timestamp */
-  lastAccessedMs: number
-  /** Access count */
-  accessCount: number
-  /** Emotional valence (-1 to 1) */
-  emotionalValence: number
-  /** Emotional arousal (0 to 1) */
-  emotionalArousal: number
-  /** Significance score (0-1) */
-  significance: number
-  /** Source type */
-  source: string
-  /** Who shared this */
-  sharedBy?: string
-  /** Video ID if frame */
-  videoId?: string
-  /** Frame number */
-  frameNumber?: number
-  /** Detected objects */
-  objects: Array<string>
-  /** Tags */
-  tags: Array<string>
-  /** Whether pinned */
-  pinned: boolean
+	/** Unique identifier */
+	id: number
+	/** Short description (the "gist") */
+	description: string
+	/** Detailed description (optional) */
+	detailedDescription?: string
+	/** When captured */
+	capturedAtMs: number
+	/** Last access timestamp */
+	lastAccessedMs: number
+	/** Access count */
+	accessCount: number
+	/** Emotional valence (-1 to 1) */
+	emotionalValence: number
+	/** Emotional arousal (0 to 1) */
+	emotionalArousal: number
+	/** Significance score (0-1) */
+	significance: number
+	/** Source type */
+	source: string
+	/** Who shared this */
+	sharedBy?: string
+	/** Video ID if frame */
+	videoId?: string
+	/** Frame number */
+	frameNumber?: number
+	/** Detected objects */
+	objects: Array<string>
+	/** Tags */
+	tags: Array<string>
+	/** Whether pinned */
+	pinned: boolean
 }
 
 /** Result from visual retrieval. */
 export interface JsVisualRetrievalCandidate {
-  /** Memory index */
-  index: number
-  /** Base-level activation */
-  baseLevel: number
-  /** Probe activation */
-  probeActivation: number
-  /** Spreading activation */
-  spreading: number
-  /** Emotional weight */
-  emotionalWeight: number
-  /** Significance boost applied */
-  significanceBoost: number
-  /** Total activation */
-  totalActivation: number
-  /** Retrieval probability */
-  probability: number
-  /** Latency estimate (ms) */
-  latencyMs: number
+	/** Memory index */
+	index: number
+	/** Base-level activation */
+	baseLevel: number
+	/** Probe activation */
+	probeActivation: number
+	/** Spreading activation */
+	spreading: number
+	/** Emotional weight */
+	emotionalWeight: number
+	/** Significance boost applied */
+	significanceBoost: number
+	/** Total activation */
+	totalActivation: number
+	/** Retrieval probability */
+	probability: number
+	/** Latency estimate (ms) */
+	latencyMs: number
 }
 
 /** Configuration for visual retrieval. */
 export interface JsVisualRetrievalConfig {
-  /** Decay rate (default: 0.5) */
-  decayRate?: number
-  /** Activation threshold (default: 0.3) */
-  activationThreshold?: number
-  /** Noise parameter (default: 0.1) */
-  noiseParameter?: number
-  /** Spreading depth (default: 3) */
-  spreadingDepth?: number
-  /** Spreading decay (default: 0.7) */
-  spreadingDecay?: number
-  /** Min probability (default: 0.1) */
-  minProbability?: number
-  /** Max results (default: 10) */
-  maxResults?: number
-  /** Bidirectional spreading (default: true) */
-  bidirectional?: boolean
-  /** Emotional boost (default: 0.3) */
-  emotionalBoost?: number
-  /** Significance boost (default: 0.2) */
-  significanceBoost?: number
+	/** Decay rate (default: 0.5) */
+	decayRate?: number
+	/** Activation threshold (default: 0.3) */
+	activationThreshold?: number
+	/** Noise parameter (default: 0.1) */
+	noiseParameter?: number
+	/** Spreading depth (default: 3) */
+	spreadingDepth?: number
+	/** Spreading decay (default: 0.7) */
+	spreadingDecay?: number
+	/** Min probability (default: 0.1) */
+	minProbability?: number
+	/** Max results (default: 10) */
+	maxResults?: number
+	/** Bidirectional spreading (default: true) */
+	bidirectional?: boolean
+	/** Emotional boost (default: 0.3) */
+	emotionalBoost?: number
+	/** Significance boost (default: 0.2) */
+	significanceBoost?: number
 }
 
 /** Where a visual memory originated. */
 export interface JsVisualSource {
-  /** Source type: "discord", "sms", "direct", "videoframe", "other" */
-  sourceType: string
+	/** Source type: "discord", "sms", "direct", "videoframe", "other" */
+	sourceType: string
 }
 
 /** Compute association strength with multiplier based on context. */
-export declare function locationAssociationStrength(currentCount: number, sameTask: boolean, sameActivity: boolean, config?: JsLocationConfig | undefined | null): number
+export declare function locationAssociationStrength(
+	currentCount: number,
+	sameTask: boolean,
+	sameActivity: boolean,
+	config?: JsLocationConfig | undefined | null
+): number
 
 /**
  * Compute decayed familiarity for multiple locations.
  *
  * Returns new familiarity values in the same order as input.
  */
-export declare function locationBatchDecay(locations: Array<JsLocationIntuition>, currentTimeMs: number, config?: JsLocationConfig | undefined | null): Array<number>
+export declare function locationBatchDecay(
+	locations: Array<JsLocationIntuition>,
+	currentTimeMs: number,
+	config?: JsLocationConfig | undefined | null
+): Array<number>
 
 /**
  * Compute familiarity for a given access count.
  *
  * Uses asymptotic curve: f(n) = 1 - 1/(1 + k*n)
  */
-export declare function locationComputeFamiliarity(accessCount: number, config?: JsLocationConfig | undefined | null): number
+export declare function locationComputeFamiliarity(
+	accessCount: number,
+	config?: JsLocationConfig | undefined | null
+): number
 
 /** Get locations associated with a given location, sorted by strength. */
-export declare function locationGetAssociated(locationId: number, associations: Array<JsLocationAssociation>, limit: number): Array<JsAssociatedLocation>
+export declare function locationGetAssociated(
+	locationId: number,
+	associations: Array<JsLocationAssociation>,
+	limit: number
+): Array<JsAssociatedLocation>
 
 /**
  * Infer activity type from context string and optional tool name.
  *
  * Precedence: explicit > keyword > tool > default
  */
-export declare function locationInferActivity(context: string, toolName?: string | undefined | null, explicitType?: string | undefined | null): JsActivityInference
+export declare function locationInferActivity(
+	context: string,
+	toolName?: string | undefined | null,
+	explicitType?: string | undefined | null
+): JsActivityInference
 
 /** Check if a location is well-known based on familiarity threshold. */
-export declare function locationIsWellKnown(familiarity: number, config?: JsLocationConfig | undefined | null): boolean
+export declare function locationIsWellKnown(
+	familiarity: number,
+	config?: JsLocationConfig | undefined | null
+): boolean
 
 /**
  * Apply nonlinear activation (MINERVA 2's cubic function).
@@ -356,7 +395,11 @@ export declare function nonlinearActivation(similarity: number): number
  *
  * P(retrieval) = 1 / (1 + e^((τ - A) / s))
  */
-export declare function retrievalProbability(activation: number, threshold: number, noise: number): number
+export declare function retrievalProbability(
+	activation: number,
+	threshold: number,
+	noise: number
+): number
 
 /**
  * Full retrieval pipeline using ACT-R spreading activation and MINERVA 2.
@@ -378,7 +421,16 @@ export declare function retrievalProbability(activation: number, threshold: numb
  * * `associations` - Optional association graph edges
  * * `config` - Optional retrieval configuration
  */
-export declare function retrieve(probeEmbedding: Array<number>, memoryEmbeddings: Array<Array<number>>, accessHistoriesMs: Array<Array<number>>, emotionalWeights: Array<number>, decayRates: Array<number>, currentTimeMs: number, associations?: Array<JsAssociation> | undefined | null, config?: JsRetrievalConfig | undefined | null): Array<JsRetrievalCandidate>
+export declare function retrieve(
+	probeEmbedding: Array<number>,
+	memoryEmbeddings: Array<Array<number>>,
+	accessHistoriesMs: Array<Array<number>>,
+	emotionalWeights: Array<number>,
+	decayRates: Array<number>,
+	currentTimeMs: number,
+	associations?: Array<JsAssociation> | undefined | null,
+	config?: JsRetrievalConfig | undefined | null
+): Array<JsRetrievalCandidate>
 
 /** Library version */
 export declare function version(): string
@@ -388,10 +440,25 @@ export declare function version(): string
  *
  * Returns a prompt string to send to Claude Haiku along with the image.
  */
-export declare function videoPrepareForSubagent(timestampSeconds: number, videoDurationSeconds: number, transcriptNearFrame: string | undefined | null, isSceneChange: boolean, sharedBy?: string | undefined | null, config?: JsFrameDescriptionConfig | undefined | null): string
+export declare function videoPrepareForSubagent(
+	timestampSeconds: number,
+	videoDurationSeconds: number,
+	transcriptNearFrame: string | undefined | null,
+	isSceneChange: boolean,
+	sharedBy?: string | undefined | null,
+	config?: JsFrameDescriptionConfig | undefined | null
+): string
 
 /** Generate a synthesis prompt for combining frame descriptions. */
-export declare function videoPrepareSynthesisPrompt(descriptions: Array<string>, valences: Array<number>, arousals: Array<number>, significances: Array<number>, timestamps: Array<number>, transcript: string | undefined | null, videoDurationSeconds: number): string
+export declare function videoPrepareSynthesisPrompt(
+	descriptions: Array<string>,
+	valences: Array<number>,
+	arousals: Array<number>,
+	significances: Array<number>,
+	timestamps: Array<number>,
+	transcript: string | undefined | null,
+	videoDurationSeconds: number
+): string
 
 /**
  * Select frames for description, respecting rate limits.
@@ -402,19 +469,50 @@ export declare function videoPrepareSynthesisPrompt(descriptions: Array<string>,
  *
  * Indices of selected frames in chronological order.
  */
-export declare function videoSelectFrames(frames: Array<JsFrameCandidate>, maxFrames: number, transcriptSegments?: Array<JsTranscriptSegment> | undefined | null): Array<number>
+export declare function videoSelectFrames(
+	frames: Array<JsFrameCandidate>,
+	maxFrames: number,
+	transcriptSegments?: Array<JsTranscriptSegment> | undefined | null
+): Array<number>
 
 /** Compute pruning candidates from visual memories. */
-export declare function visualComputePruningCandidates(memories: Array<JsVisualMemory>, currentTimeMs: number, config?: JsVisualConfig | undefined | null): Array<JsPruningCandidate>
+export declare function visualComputePruningCandidates(
+	memories: Array<JsVisualMemory>,
+	currentTimeMs: number,
+	config?: JsVisualConfig | undefined | null
+): Array<JsPruningCandidate>
 
 /** Compute tag strength based on various factors. */
-export declare function visualComputeTagStrength(baseConfidence: number, accessCount: number, significance: number, config?: JsVisualConfig | undefined | null): number
+export declare function visualComputeTagStrength(
+	baseConfidence: number,
+	accessCount: number,
+	significance: number,
+	config?: JsVisualConfig | undefined | null
+): number
 
 /** Retrieve visual memories based on probe embedding. */
-export declare function visualRetrieve(probeEmbedding: Array<number>, memoryEmbeddings: Array<Array<number>>, accessHistoriesMs: Array<Array<number>>, emotionalWeights: Array<number>, significanceScores: Array<number>, currentTimeMs: number, associations?: Array<JsAssociation> | undefined | null, config?: JsVisualRetrievalConfig | undefined | null): Array<JsVisualRetrievalCandidate>
+export declare function visualRetrieve(
+	probeEmbedding: Array<number>,
+	memoryEmbeddings: Array<Array<number>>,
+	accessHistoriesMs: Array<Array<number>>,
+	emotionalWeights: Array<number>,
+	significanceScores: Array<number>,
+	currentTimeMs: number,
+	associations?: Array<JsAssociation> | undefined | null,
+	config?: JsVisualRetrievalConfig | undefined | null
+): Array<JsVisualRetrievalCandidate>
 
 /** Check if a visual memory should be pruned. */
-export declare function visualShouldPrune(significance: number, daysSinceAccess: number, isPinned: boolean, isKeyframe: boolean, config?: JsVisualConfig | undefined | null): boolean
+export declare function visualShouldPrune(
+	significance: number,
+	daysSinceAccess: number,
+	isPinned: boolean,
+	isKeyframe: boolean,
+	config?: JsVisualConfig | undefined | null
+): boolean
 
 /** Check if a tag should be applied. */
-export declare function visualShouldTag(strength: number, threshold: number): boolean
+export declare function visualShouldTag(
+	strength: number,
+	threshold: number
+): boolean

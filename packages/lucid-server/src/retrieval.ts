@@ -174,7 +174,7 @@ export class LucidRetrieval {
 			const now = Date.now()
 			const candidates: RetrievalCandidate[] = filteredMemories.map(
 				(memory, _i) => {
-					const history = accessHistories[memories.indexOf(memory)]
+					const history = accessHistories[memories.indexOf(memory)] ?? []
 					const baseLevel =
 						shouldUseNative && nativeModule
 							? nativeModule.computeBaseLevel(history, now, config.decay)
@@ -328,20 +328,24 @@ export class LucidRetrieval {
 		)
 
 		// Map native results back to Memory objects
-		const candidates: RetrievalCandidate[] = nativeResults.map((result) => {
-			const memory = memoriesWithEmbeddings[result.index]
-			const embedding = memoryEmbeddings[result.index]
-			const similarity = nativeModule?.cosineSimilarity(probeVector, embedding)
+		const candidates: RetrievalCandidate[] = nativeResults
+			.map((result) => {
+				const memory = memoriesWithEmbeddings[result.index]
+				const embedding = memoryEmbeddings[result.index]
+				if (!memory || !embedding) return null
+				const similarity =
+					nativeModule?.cosineSimilarity(probeVector, embedding) ?? 0
 
-			return {
-				memory,
-				score: result.totalActivation,
-				similarity,
-				baseLevel: result.baseLevel,
-				spreading: result.spreading,
-				probability: result.probability,
-			}
-		})
+				return {
+					memory,
+					score: result.totalActivation,
+					similarity,
+					baseLevel: result.baseLevel,
+					spreading: result.spreading,
+					probability: result.probability,
+				}
+			})
+			.filter((c): c is NonNullable<typeof c> => c !== null)
 
 		// Record access for returned memories
 		for (const candidate of candidates) {
@@ -370,6 +374,7 @@ export class LucidRetrieval {
 		for (let i = 0; i < memoriesWithEmbeddings.length; i++) {
 			const memory = memoriesWithEmbeddings[i]
 			const embedding = memoryEmbeddings[i]
+			if (!memory || !embedding) continue
 
 			// Compute similarity
 			const similarity = tsCosineSimilarity(probeVector, embedding)
@@ -378,7 +383,7 @@ export class LucidRetrieval {
 			const probeActivation = similarity ** 3
 
 			// Compute base-level activation
-			const history = memoryAccessHistories[i]
+			const history = memoryAccessHistories[i] ?? []
 			const baseLevel = computeBaseLevelTS(history, now, config.decay)
 
 			// Compute spreading activation
@@ -552,11 +557,10 @@ export class LucidRetrieval {
 		const embeddings = await this.embedder.embedBatch(texts)
 
 		for (let i = 0; i < pending.length; i++) {
-			this.storage.storeEmbedding(
-				pending[i].id,
-				embeddings[i].vector,
-				embeddings[i].model
-			)
+			const memory = pending[i]
+			const embedding = embeddings[i]
+			if (!memory || !embedding) continue
+			this.storage.storeEmbedding(memory.id, embedding.vector, embedding.model)
 		}
 
 		return pending.length
@@ -596,7 +600,7 @@ export class LucidRetrieval {
 			const now = Date.now()
 			const candidates: VisualRetrievalCandidate[] = visuals.map(
 				(visual, i) => {
-					const history = accessHistories[i]
+					const history = accessHistories[i] ?? []
 					const baseLevel =
 						shouldUseNative && nativeModule
 							? nativeModule.computeBaseLevel(history, now, config.decay)
@@ -644,14 +648,15 @@ export class LucidRetrieval {
 
 		for (let i = 0; i < visuals.length; i++) {
 			const visual = visuals[i]
+			if (!visual) continue
 			const embedding = embeddingsMap.get(visual.id)
 			if (!embedding) continue
 
 			visualsWithEmbeddings.push(visual)
 			visualEmbeddings.push(embedding)
-			visualAccessHistories.push(accessHistories[i] || [Date.now()])
-			visualEmotionalWeights.push(emotionalWeights[i])
-			visualSignificanceScores.push(significanceScores[i])
+			visualAccessHistories.push(accessHistories[i] ?? [Date.now()])
+			visualEmotionalWeights.push(emotionalWeights[i] ?? 1)
+			visualSignificanceScores.push(significanceScores[i] ?? 0.5)
 		}
 
 		if (visualsWithEmbeddings.length === 0) {
@@ -683,14 +688,13 @@ export class LucidRetrieval {
 				}
 			)
 
-			const candidates: VisualRetrievalCandidate[] = nativeResults.map(
-				(result) => {
+			const candidates: VisualRetrievalCandidate[] = nativeResults
+				.map((result) => {
 					const visual = visualsWithEmbeddings[result.index]
 					const embedding = visualEmbeddings[result.index]
-					const similarity = nativeModule?.cosineSimilarity(
-						probeVector,
-						embedding
-					)
+					if (!visual || !embedding) return null
+					const similarity =
+						nativeModule?.cosineSimilarity(probeVector, embedding) ?? 0
 
 					return {
 						visual,
@@ -700,8 +704,8 @@ export class LucidRetrieval {
 						spreading: result.spreading,
 						probability: result.probability,
 					}
-				}
-			)
+				})
+				.filter((c): c is NonNullable<typeof c> => c !== null)
 
 			// Record access for returned visuals
 			for (const candidate of candidates) {
@@ -718,15 +722,16 @@ export class LucidRetrieval {
 		for (let i = 0; i < visualsWithEmbeddings.length; i++) {
 			const visual = visualsWithEmbeddings[i]
 			const embedding = visualEmbeddings[i]
+			if (!visual || !embedding) continue
 
 			const similarity = tsCosineSimilarity(probeVector, embedding)
 			const probeActivation = similarity ** 3
-			const history = visualAccessHistories[i]
+			const history = visualAccessHistories[i] ?? []
 			const baseLevel = computeBaseLevelTS(history, now, config.decay)
 
 			// Add significance and emotional boosts
-			const emotionalWeight = visualEmotionalWeights[i]
-			const significance = visualSignificanceScores[i]
+			const emotionalWeight = visualEmotionalWeights[i] ?? 1
+			const significance = visualSignificanceScores[i] ?? 0.5
 			const emotionalBoost =
 				emotionalWeight > 0.7 ? (emotionalWeight - 0.7) * 0.3 : 0
 			const significanceBoost = significance * 0.2
@@ -803,10 +808,13 @@ export class LucidRetrieval {
 		const embeddings = await this.embedder.embedBatch(texts)
 
 		for (let i = 0; i < pending.length; i++) {
+			const visual = pending[i]
+			const embedding = embeddings[i]
+			if (!visual || !embedding) continue
 			this.storage.storeVisualEmbedding(
-				pending[i].id,
-				embeddings[i].vector,
-				embeddings[i].model
+				visual.id,
+				embedding.vector,
+				embedding.model
 			)
 		}
 

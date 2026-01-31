@@ -388,9 +388,8 @@ fn parse_wav_samples(data: &[u8]) -> std::result::Result<Vec<f32>, String> {
 	while pos + 8 < data.len() {
 		let chunk_id = &data[pos..pos + 4];
 		#[allow(clippy::cast_possible_truncation)]
-		let chunk_size =
-			u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
-				as usize;
+		let chunk_size = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+			as usize;
 
 		if chunk_id == b"data" {
 			let samples_start = pos + 8;

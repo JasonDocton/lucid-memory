@@ -125,7 +125,7 @@ describe("LucidStorage", () => {
 			// Check values are close (floating point)
 			for (let i = 0; i < vector.length; i++) {
 				// biome-ignore lint/style/noNonNullAssertion: validated above with toBeDefined()
-				expect(Math.abs(retrieved![i] - vector[i])).toBeLessThan(0.0001)
+				expect(Math.abs(retrieved![i]! - vector[i]!)).toBeLessThan(0.0001)
 			}
 		})
 
@@ -137,7 +137,7 @@ describe("LucidStorage", () => {
 
 			const pending = storage.getMemoriesWithoutEmbeddings()
 			expect(pending.length).toBe(1)
-			expect(pending[0].id).toBe(m2.id)
+			expect(pending[0]?.id).toBe(m2.id)
 		})
 
 		it("gets all embeddings as a map", () => {
@@ -163,8 +163,8 @@ describe("LucidStorage", () => {
 
 			const assocs1 = storage.getAssociations(m1.id)
 			expect(assocs1.length).toBe(1)
-			expect(assocs1[0].targetId).toBe(m2.id)
-			expect(assocs1[0].strength).toBe(0.8)
+			expect(assocs1[0]?.targetId).toBe(m2.id)
+			expect(assocs1[0]?.strength).toBe(0.8)
 
 			// Association is bidirectional in retrieval
 			const assocs2 = storage.getAssociations(m2.id)
@@ -179,7 +179,7 @@ describe("LucidStorage", () => {
 			storage.associate(m1.id, m2.id, 0.9) // Update
 
 			const assocs = storage.getAssociations(m1.id)
-			expect(assocs[0].strength).toBe(0.9)
+			expect(assocs[0]?.strength).toBe(0.9)
 		})
 
 		it("removes associations", () => {
@@ -229,7 +229,7 @@ describe("LucidStorage", () => {
 
 			const inProject = storage.queryMemories({ projectId: project.id })
 			expect(inProject.length).toBe(1)
-			expect(inProject[0].content).toBe("In project")
+			expect(inProject[0]?.content).toBe("In project")
 		})
 	})
 
@@ -378,8 +378,8 @@ describe("LucidStorage", () => {
 				storage.getLocationByPath("/src/buggy.ts")!.id
 			)
 
-			expect(contexts[0].activityType).toBe("debugging")
-			expect(contexts[0].activitySource).toBe("keyword")
+			expect(contexts[0]?.activityType).toBe("debugging")
+			expect(contexts[0]?.activitySource).toBe("keyword")
 		})
 
 		it("respects explicit activity type", () => {
@@ -395,8 +395,8 @@ describe("LucidStorage", () => {
 				storage.getLocationByPath("/src/code.ts")!.id
 			)
 
-			expect(contexts[0].activityType).toBe("refactoring")
-			expect(contexts[0].activitySource).toBe("explicit")
+			expect(contexts[0]?.activityType).toBe("refactoring")
+			expect(contexts[0]?.activitySource).toBe("explicit")
 		})
 
 		it("gets location statistics", () => {
@@ -445,7 +445,7 @@ describe("LucidStorage", () => {
 
 			const string = storage.findLocations("string")
 			expect(string.length).toBe(1)
-			expect(string[0].path).toBe("/src/utils/string.ts")
+			expect(string[0]?.path).toBe("/src/utils/string.ts")
 		})
 
 		it("pins and unpins locations", () => {
