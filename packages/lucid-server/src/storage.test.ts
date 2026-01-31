@@ -8,25 +8,25 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LucidStorage } from "./storage.ts"
 
-const TEST_DB = join(tmpdir(), `lucid-test-${Date.now()}.db`)
+const testDbPath = join(tmpdir(), `lucid-test-${Date.now()}.db`)
 
 describe("LucidStorage", () => {
 	let storage: LucidStorage
 
 	beforeEach(() => {
-		storage = new LucidStorage({ dbPath: TEST_DB })
+		storage = new LucidStorage({ dbPath: testDbPath })
 	})
 
 	afterEach(() => {
 		storage.close()
-		if (existsSync(TEST_DB)) {
-			unlinkSync(TEST_DB)
+		if (existsSync(testDbPath)) {
+			unlinkSync(testDbPath)
 		}
-		if (existsSync(`${TEST_DB}-wal`)) {
-			unlinkSync(`${TEST_DB}-wal`)
+		if (existsSync(`${testDbPath}-wal`)) {
+			unlinkSync(`${testDbPath}-wal`)
 		}
-		if (existsSync(`${TEST_DB}-shm`)) {
-			unlinkSync(`${TEST_DB}-shm`)
+		if (existsSync(`${testDbPath}-shm`)) {
+			unlinkSync(`${testDbPath}-shm`)
 		}
 	})
 

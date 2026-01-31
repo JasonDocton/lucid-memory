@@ -10,17 +10,17 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 
 // Simple file logger for embedding failures
-const LOG_DIR = join(homedir(), ".lucid", "logs")
-const LOG_FILE = join(LOG_DIR, "embeddings.log")
+const logDir = join(homedir(), ".lucid", "logs")
+const logFile = join(logDir, "embeddings.log")
 
 function logError(message: string, error?: Error): void {
 	try {
-		if (!existsSync(LOG_DIR)) {
-			mkdirSync(LOG_DIR, { recursive: true })
+		if (!existsSync(logDir)) {
+			mkdirSync(logDir, { recursive: true })
 		}
 		const timestamp = new Date().toISOString()
 		const errorDetail = error ? `: ${error.message}` : ""
-		appendFileSync(LOG_FILE, `[${timestamp}] ERROR: ${message}${errorDetail}\n`)
+		appendFileSync(logFile, `[${timestamp}] ERROR: ${message}${errorDetail}\n`)
 	} catch {
 		// Silently fail if we can't write logs
 	}
@@ -28,11 +28,11 @@ function logError(message: string, error?: Error): void {
 
 function logWarn(message: string): void {
 	try {
-		if (!existsSync(LOG_DIR)) {
-			mkdirSync(LOG_DIR, { recursive: true })
+		if (!existsSync(logDir)) {
+			mkdirSync(logDir, { recursive: true })
 		}
 		const timestamp = new Date().toISOString()
-		appendFileSync(LOG_FILE, `[${timestamp}] WARN: ${message}\n`)
+		appendFileSync(logFile, `[${timestamp}] WARN: ${message}\n`)
 	} catch {
 		// Silently fail if we can't write logs
 	}
@@ -53,9 +53,9 @@ export interface EmbeddingResult {
 	dimensions: number
 }
 
-const DEFAULT_OLLAMA_HOST = "http://localhost:11434"
-const DEFAULT_OLLAMA_MODEL = "nomic-embed-text"
-const DEFAULT_OPENAI_MODEL = "text-embedding-3-small"
+const defaultOllamaHost = "http://localhost:11434"
+const defaultOllamaModel = "nomic-embed-text"
+const defaultOpenaiModel = "text-embedding-3-small"
 
 /**
  * Embedding client for generating vectors from text.
@@ -100,7 +100,7 @@ export class EmbeddingClient {
 	async isAvailable(): Promise<boolean> {
 		try {
 			if (this.config.provider === "ollama") {
-				const host = this.config.ollamaHost ?? DEFAULT_OLLAMA_HOST
+				const host = this.config.ollamaHost ?? defaultOllamaHost
 				const response = await fetch(`${host}/api/tags`)
 				return response.ok
 			} else {
@@ -117,9 +117,9 @@ export class EmbeddingClient {
 	 */
 	getModel(): string {
 		if (this.config.provider === "ollama") {
-			return this.config.model ?? DEFAULT_OLLAMA_MODEL
+			return this.config.model ?? defaultOllamaModel
 		}
-		return this.config.model ?? DEFAULT_OPENAI_MODEL
+		return this.config.model ?? defaultOpenaiModel
 	}
 
 	// ============================================================================
@@ -127,8 +127,8 @@ export class EmbeddingClient {
 	// ============================================================================
 
 	private async embedOllama(text: string): Promise<EmbeddingResult> {
-		const host = this.config.ollamaHost ?? DEFAULT_OLLAMA_HOST
-		const model = this.config.model ?? DEFAULT_OLLAMA_MODEL
+		const host = this.config.ollamaHost ?? defaultOllamaHost
+		const model = this.config.model ?? defaultOllamaModel
 
 		let response: Response
 		try {
@@ -189,7 +189,7 @@ export class EmbeddingClient {
 			throw new Error("OpenAI API key required")
 		}
 
-		const model = this.config.model ?? DEFAULT_OPENAI_MODEL
+		const model = this.config.model ?? defaultOpenaiModel
 
 		const response = await fetch("https://api.openai.com/v1/embeddings", {
 			method: "POST",
@@ -229,7 +229,7 @@ export class EmbeddingClient {
 export async function detectProvider(): Promise<EmbeddingConfig | null> {
 	// Try Ollama first (local, free)
 	try {
-		const response = await fetch(`${DEFAULT_OLLAMA_HOST}/api/tags`, {
+		const response = await fetch(`${defaultOllamaHost}/api/tags`, {
 			signal: AbortSignal.timeout(2000),
 		})
 
@@ -240,7 +240,7 @@ export async function detectProvider(): Promise<EmbeddingConfig | null> {
 			)
 
 			if (hasModel) {
-				return { provider: "ollama", model: DEFAULT_OLLAMA_MODEL }
+				return { provider: "ollama", model: defaultOllamaModel }
 			}
 		}
 	} catch (error: unknown) {
