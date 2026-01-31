@@ -34,5 +34,14 @@ jobs:
       - name: Run tests
         run: cargo test --features transcription
 
+      - name: Setup trusted publishing
+        run: |
+          cargo install cargo-credential-github-actions
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml <<EOF
+          [registry]
+          global-credential-providers = ["cargo-credential-github-actions"]
+          EOF
+
       - name: Publish lucid-core
         run: cargo publish -p lucid-core
