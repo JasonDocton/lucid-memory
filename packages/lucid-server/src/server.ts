@@ -76,7 +76,7 @@ function startBackgroundEmbeddingProcessor(): void {
  * Runs every hour - frequent enough to be responsive, rare enough to not waste cycles.
  */
 function startBackgroundDecayProcessor(): void {
-	const ONE_HOUR_MS = 60 * 60 * 1000
+	const oneHourMs = 60 * 60 * 1000
 
 	setInterval(() => {
 		try {
@@ -89,7 +89,7 @@ function startBackgroundDecayProcessor(): void {
 		} catch (error) {
 			console.error("[lucid] Error applying familiarity decay:", error)
 		}
-	}, ONE_HOUR_MS)
+	}, oneHourMs)
 }
 
 // === Create MCP Server ===

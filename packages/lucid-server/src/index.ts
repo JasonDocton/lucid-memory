@@ -35,4 +35,4 @@ export { LucidStorage } from "./storage.ts"
 // Run with: bun run src/server.ts
 
 // Version
-export const VERSION = "0.1.0"
+export const version = "0.1.0" as const
