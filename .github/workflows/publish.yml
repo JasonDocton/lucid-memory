@@ -34,14 +34,20 @@ jobs:
       - name: Run tests
         run: cargo test --features transcription
 
-      - name: Setup trusted publishing
+      - name: Get OIDC token and publish
         run: |
-          cargo install cargo-credential-github-actions
-          mkdir -p ~/.cargo
-          cat >> ~/.cargo/config.toml <<EOF
-          [registry]
-          global-credential-providers = ["cargo-credential-github-actions"]
-          EOF
+          # Get OIDC token from GitHub
+          OIDC_TOKEN=$(curl -sLS "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=crates.io" \
+            -H "Accept: application/json" \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            | jq -r '.value')
 
-      - name: Publish lucid-core
-        run: cargo publish -p lucid-core
+          # Exchange OIDC token for crates.io publish token
+          CRATES_TOKEN=$(curl -sLS "https://crates.io/api/v1/trusted_publishing/tokens" \
+            -H "Accept: application/json" \
+            -X POST \
+            --data "{\"jwt\": \"${OIDC_TOKEN}\"}" \
+            | jq -r '.token')
+
+          # Publish with the token
+          CARGO_REGISTRY_TOKEN="${CRATES_TOKEN}" cargo publish -p lucid-core
