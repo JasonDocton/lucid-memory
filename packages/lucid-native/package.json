@@ -1,32 +1,28 @@
 {
-  "name": "@lucid-memory/native",
-  "version": "0.1.0",
-  "description": "Native bindings for lucid-core memory retrieval engine",
-  "main": "index.js",
-  "types": "index.d.ts",
-  "napi": {
-    "binaryName": "lucid-native",
-    "targets": [
-      "aarch64-apple-darwin",
-      "x86_64-apple-darwin",
-      "x86_64-unknown-linux-gnu",
-      "aarch64-unknown-linux-gnu",
-      "x86_64-pc-windows-msvc"
-    ]
-  },
-  "scripts": {
-    "build": "napi build --platform --release --manifest-path ../../crates/lucid-napi/Cargo.toml --output-dir .",
-    "build:debug": "napi build --platform --manifest-path ../../crates/lucid-napi/Cargo.toml --output-dir .",
-    "prepublishOnly": "napi prepublish -t npm"
-  },
-  "devDependencies": {
-    "@napi-rs/cli": "^3.0.0-alpha.77"
-  },
-  "files": [
-    "index.js",
-    "index.d.ts",
-    "*.node"
-  ],
-  "keywords": ["napi", "rust", "memory", "retrieval", "act-r"],
-  "license": "GPL-3.0"
+	"name": "@lucid-memory/native",
+	"version": "0.1.0",
+	"description": "Native bindings for lucid-core memory retrieval engine",
+	"main": "index.js",
+	"types": "index.d.ts",
+	"napi": {
+		"binaryName": "lucid-native",
+		"targets": [
+			"aarch64-apple-darwin",
+			"x86_64-apple-darwin",
+			"x86_64-unknown-linux-gnu",
+			"aarch64-unknown-linux-gnu",
+			"x86_64-pc-windows-msvc"
+		]
+	},
+	"scripts": {
+		"build": "napi build --platform --release --manifest-path ../../crates/lucid-napi/Cargo.toml --output-dir .",
+		"build:debug": "napi build --platform --manifest-path ../../crates/lucid-napi/Cargo.toml --output-dir .",
+		"prepublishOnly": "napi prepublish -t npm"
+	},
+	"devDependencies": {
+		"@napi-rs/cli": "^3.0.0-alpha.77"
+	},
+	"files": ["index.js", "index.d.ts", "*.node"],
+	"keywords": ["napi", "rust", "memory", "retrieval", "act-r"],
+	"license": "GPL-3.0"
 }

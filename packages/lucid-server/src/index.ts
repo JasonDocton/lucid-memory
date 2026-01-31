@@ -5,20 +5,34 @@
  * Install once, Claude Code remembers forever.
  */
 
-// Storage layer
-export { LucidStorage } from "./storage.js";
-export type { Memory, MemoryInput, MemoryType, Association, Project, StorageConfig } from "./storage.js";
-
+export type {
+	EmbeddingConfig,
+	EmbeddingProvider,
+	EmbeddingResult,
+} from "./embeddings.ts"
 // Embeddings
-export { EmbeddingClient, detectProvider, cosineSimilarity, normalize } from "./embeddings.js";
-export type { EmbeddingConfig, EmbeddingProvider, EmbeddingResult } from "./embeddings.js";
-
+export {
+	cosineSimilarity,
+	detectProvider,
+	EmbeddingClient,
+	normalize,
+} from "./embeddings.ts"
+export type { RetrievalCandidate, RetrievalConfig } from "./retrieval.ts"
 // Retrieval
-export { LucidRetrieval, DEFAULT_CONFIG } from "./retrieval.js";
-export type { RetrievalCandidate, RetrievalConfig } from "./retrieval.js";
+export { DEFAULT_CONFIG, LucidRetrieval } from "./retrieval.ts"
+export type {
+	Association,
+	Memory,
+	MemoryInput,
+	MemoryType,
+	Project,
+	StorageConfig,
+} from "./storage.ts"
+// Storage layer
+export { LucidStorage } from "./storage.ts"
 
 // Server entrypoint is src/server.ts
 // Run with: bun run src/server.ts
 
 // Version
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.0"

@@ -1,31 +1,29 @@
 {
-  "name": "lucid-memory",
-  "version": "0.1.0",
-  "private": true,
-  "workspaces": [
-    "ts"
-  ],
-  "type": "module",
-  "scripts": {
-    "build": "bun run build:rust && bun run build:ts",
-    "build:rust": "cargo build --release",
-    "build:ts": "bun --filter '*' run build",
-    "dev": "bun --filter '*' run dev",
-    "test": "bun run test:rust && bun run test:ts",
-    "test:rust": "cargo test",
-    "test:ts": "bun --filter '*' test",
-    "lint": "bun run lint:rust && bun run lint:ts",
-    "lint:rust": "cargo clippy --all-targets --all-features",
-    "lint:ts": "biome check .",
-    "lint:fix": "biome check --write .",
-    "fmt": "bun run fmt:rust && bun run fmt:ts",
-    "fmt:rust": "cargo fmt",
-    "fmt:ts": "biome format --write .",
-    "check": "bun run lint && bun run test",
-    "clean": "cargo clean && rm -rf node_modules ts/node_modules"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.3.12",
-    "typescript": "^5.9.3"
-  }
+	"name": "lucid-memory",
+	"version": "0.1.0",
+	"private": true,
+	"workspaces": ["ts"],
+	"type": "module",
+	"scripts": {
+		"build": "bun run build:rust && bun run build:ts",
+		"build:rust": "cargo build --release",
+		"build:ts": "bun --filter '*' run build",
+		"dev": "bun --filter '*' run dev",
+		"test": "bun run test:rust && bun run test:ts",
+		"test:rust": "cargo test",
+		"test:ts": "bun --filter '*' test",
+		"lint": "bun run lint:rust && bun run lint:ts",
+		"lint:rust": "cargo clippy --all-targets --all-features",
+		"lint:ts": "biome check .",
+		"lint:fix": "biome check --write .",
+		"fmt": "bun run fmt:rust && bun run fmt:ts",
+		"fmt:rust": "cargo fmt",
+		"fmt:ts": "biome format --write .",
+		"check": "bun run lint && bun run test",
+		"clean": "cargo clean && rm -rf node_modules ts/node_modules"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.3.12",
+		"typescript": "^5.9.3"
+	}
 }

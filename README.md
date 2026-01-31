@@ -12,6 +12,9 @@ curl -fsSL lucidmemory.dev/install | bash
 
 <sub>Works with Claude Code · macOS & Linux · <a href="#windows">Windows instructions</a></sub>
 
+<br><br>
+<b>New in 0.2.0:</b> <a href="#location-intuitions">Location Intuitions</a> — Claude now builds spatial memory of your codebase, navigating familiar files without searching.
+
 </div>
 
 ---
@@ -114,6 +117,53 @@ Lucid implements how humans actually remember:
 | Context | Ignored | Shapes what surfaces |
 | Time | Flat | Recent/frequent = stronger |
 | Associations | None | Memories activate each other |
+
+<h3 id="location-intuitions">Location Intuitions</h3>
+
+**New in 0.2:** Claude now builds spatial memory of your codebase.
+
+After working in a project, Claude develops *intuitions* about file locations—not through explicit memorization, but through repeated exposure, just like you know where your kitchen is without thinking about it.
+
+| Without Location Intuitions | With Location Intuitions |
+| --------------------------- | ------------------------ |
+| Claude searches for files every time | Claude navigates directly to familiar files |
+| "Let me search for the auth handler..." | "I know auth is in `src/auth/handler.ts`..." |
+| Each session starts from zero | Familiarity persists across sessions |
+
+**How it works:**
+
+- **Familiarity grows asymptotically** — First access: low familiarity. 10th access: high familiarity. 100th access: not much higher (diminishing returns, like real learning)
+- **Context is bound to location** — Claude remembers *what you were doing* when you touched each file (debugging? refactoring? reading?)
+- **Related files link together** — Files worked on for the same task form associative networks
+- **Unused knowledge fades** — Files not accessed in 30+ days gradually decay (but well-known files have "sticky" floors)
+
+<details>
+<summary><b>The neuroscience</b></summary>
+
+Location Intuitions are modeled on three brain systems:
+
+**Hippocampal Place Cells** (O'Keefe & Nadel, 1978)
+- Neurons that fire when you're in a specific location
+- Familiarity increases with repeated exposure
+- Our implementation: `familiarity = 1 - 1/(1 + 0.1n)` where n = access count
+
+**Entorhinal Cortex** (Moser et al., 2008)
+- Binds context to spatial memory — *where* + *what you were doing*
+- We track activity type (reading, writing, debugging) bound to each file access
+
+**Procedural Memory** (Squire, 1992)
+- "Knowing how" vs "knowing that" — you don't consciously recall how to ride a bike
+- Direct file access (without searching) indicates procedural knowledge
+- We track `searchesSaved` as a signal of true familiarity
+
+**Associative Networks** (Hebb, 1949)
+- "Neurons that fire together wire together"
+- Files accessed for the same task form bidirectional associations
+- Shared task context creates strong links; temporal proximity creates weaker links
+
+</details>
+
+---
 
 ### The Science
 
@@ -277,10 +327,17 @@ When memory 0 activates, memory 1 receives proportional activation.
 
 ## References
 
+### Memory & Retrieval
 - Anderson, J. R. (1983). *The Architecture of Cognition*
 - Anderson, J. R., & Lebiere, C. (1998). *The Atomic Components of Thought*
 - Hintzman, D. L. (1988). Judgments of frequency and recognition memory in a multiple-trace memory model. *Psychological Review*, 95(4), 528-551.
 - Kahana, M. J. (2012). *Foundations of Human Memory*
+
+### Spatial Memory & Location Intuitions
+- O'Keefe, J., & Nadel, L. (1978). *The Hippocampus as a Cognitive Map*
+- Moser, E. I., Kropff, E., & Moser, M. B. (2008). Place cells, grid cells, and the brain's spatial representation system. *Annual Review of Neuroscience*, 31, 69-89.
+- Squire, L. R. (1992). Memory and the hippocampus: A synthesis from findings with rats, monkeys, and humans. *Psychological Review*, 99(2), 195-231.
+- Hebb, D. O. (1949). *The Organization of Behavior*
 
 ## License
 

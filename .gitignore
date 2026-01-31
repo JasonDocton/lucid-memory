@@ -9,6 +9,7 @@ out
 dist
 target
 *.tgz
+docs/
 
 # code coverage
 coverage

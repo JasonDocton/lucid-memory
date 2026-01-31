@@ -111,6 +111,7 @@
 #![allow(clippy::needless_return)]
 
 pub mod activation;
+pub mod location;
 pub mod retrieval;
 pub mod spreading;
 
@@ -120,6 +121,14 @@ pub use activation::{
 };
 pub use retrieval::{retrieve, RetrievalCandidate, RetrievalConfig, RetrievalInput};
 pub use spreading::{spread_activation, Association, SpreadingConfig, SpreadingResult};
+
+// Location Intuitions (spatial memory)
+pub use location::{
+	compute_association_strength, compute_batch_decay, compute_decayed_familiarity,
+	compute_familiarity, get_associated_locations, infer_activity_type, initial_familiarity,
+	is_well_known, spread_location_activation, ActivityInference, ActivityType, InferenceSource,
+	LocationAssociation, LocationConfig, LocationIntuition,
+};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -5,64 +5,207 @@
  *
  * B(m) = ln[Σ(t_k)^(-d)]
  */
-export declare function computeBaseLevel(accessTimesMs: Array<number>, currentTimeMs: number, decay: number): number
+export declare function computeBaseLevel(
+	accessTimesMs: Array<number>,
+	currentTimeMs: number,
+	decay: number
+): number
 
 /** Compute surprise (prediction error) between expected and actual. */
-export declare function computeSurprise(expectedEmbedding: Array<number>, actualEmbedding: Array<number>, memoryAgeDays: number, memoryStrength: number, baseThreshold: number): number
+export declare function computeSurprise(
+	expectedEmbedding: Array<number>,
+	actualEmbedding: Array<number>,
+	memoryAgeDays: number,
+	memoryStrength: number,
+	baseThreshold: number
+): number
 
 /** Compute cosine similarity between two vectors. */
-export declare function cosineSimilarity(a: Array<number>, b: Array<number>): number
+export declare function cosineSimilarity(
+	a: Array<number>,
+	b: Array<number>
+): number
 
 /** Batch compute cosine similarity between probe and all memories. */
-export declare function cosineSimilarityBatch(probe: Array<number>, memories: Array<Array<number>>): Array<number>
+export declare function cosineSimilarityBatch(
+	probe: Array<number>,
+	memories: Array<Array<number>>
+): Array<number>
+
+/** Result of activity type inference. */
+export interface JsActivityInference {
+	/** The inferred activity type (reading, writing, debugging, refactoring, reviewing, unknown) */
+	activityType: string
+	/** How it was inferred (explicit, keyword, tool, default) */
+	source: string
+	/** Confidence level (0-1) */
+	confidence: number
+}
+
+/** Associated location result. */
+export interface JsAssociatedLocation {
+	/** Location index */
+	locationId: number
+	/** Association strength */
+	strength: number
+}
 
 /** Association between two memories for spreading activation. */
 export interface JsAssociation {
-  source: number
-  target: number
-  forwardStrength: number
-  backwardStrength: number
+	source: number
+	target: number
+	forwardStrength: number
+	backwardStrength: number
+}
+
+/** Association between two locations. */
+export interface JsLocationAssociation {
+	/** Source location index */
+	source: number
+	/** Target location index */
+	target: number
+	/** Association strength (0-1) */
+	strength: number
+	/** Number of co-accesses */
+	coAccessCount: number
+}
+
+/** Configuration for location operations. */
+export interface JsLocationConfig {
+	/** Familiarity curve coefficient (default: 0.1) */
+	familiarityK?: number
+	/** Days before decay begins (default: 30) */
+	staleThresholdDays?: number
+	/** Maximum decay rate (default: 0.10) */
+	maxDecayRate?: number
+	/** How much familiarity reduces decay (default: 0.8) */
+	decayDampening?: number
+	/** Minimum familiarity floor (default: 0.1) */
+	baseFloor?: number
+	/** Extra floor for well-known locations (default: 0.4) */
+	stickyBonus?: number
+	/** Threshold for "well-known" (default: 0.7) */
+	wellKnownThreshold?: number
+	/** Multiplier: task + same activity (default: 5.0) */
+	taskSameActivityMultiplier?: number
+	/** Multiplier: task + different activity (default: 3.0) */
+	taskDiffActivityMultiplier?: number
+	/** Multiplier: time + same activity (default: 2.0) */
+	timeSameActivityMultiplier?: number
+	/** Multiplier: time + different activity (default: 1.0) */
+	timeDiffActivityMultiplier?: number
+	/** Backward strength factor (default: 0.7) */
+	backwardStrengthFactor?: number
+}
+
+/** A location (file) with familiarity metrics. */
+export interface JsLocationIntuition {
+	/** Index in the location array */
+	id: number
+	/** Familiarity level (0-1) */
+	familiarity: number
+	/** Number of times accessed */
+	accessCount: number
+	/** Number of searches avoided */
+	searchesSaved: number
+	/** Last access timestamp (ms) */
+	lastAccessedMs: number
+	/** Whether pinned (immune to decay) */
+	pinned: boolean
 }
 
 /** Result candidate from retrieval. */
 export interface JsRetrievalCandidate {
-  /** Memory index */
-  index: number
-  /** Base-level activation from access history */
-  baseLevel: number
-  /** Probe-trace activation (cubed similarity) */
-  probeActivation: number
-  /** Spreading activation from associated memories */
-  spreading: number
-  /** Emotional weight factor */
-  emotionalWeight: number
-  /** Combined total activation */
-  totalActivation: number
-  /** Retrieval probability (0-1) */
-  probability: number
-  /** Estimated retrieval latency (ms) */
-  latencyMs: number
+	/** Memory index */
+	index: number
+	/** Base-level activation from access history */
+	baseLevel: number
+	/** Probe-trace activation (cubed similarity) */
+	probeActivation: number
+	/** Spreading activation from associated memories */
+	spreading: number
+	/** Emotional weight factor */
+	emotionalWeight: number
+	/** Combined total activation */
+	totalActivation: number
+	/** Retrieval probability (0-1) */
+	probability: number
+	/** Estimated retrieval latency (ms) */
+	latencyMs: number
 }
 
 /** Configuration for retrieval. */
 export interface JsRetrievalConfig {
-  /** Decay rate for base-level activation (default: 0.5) */
-  decayRate?: number
-  /** Retrieval threshold (default: 0.3) */
-  activationThreshold?: number
-  /** Noise parameter (default: 0.1) */
-  noiseParameter?: number
-  /** Spreading activation depth (default: 3) */
-  spreadingDepth?: number
-  /** Spreading decay per hop (default: 0.7) */
-  spreadingDecay?: number
-  /** Minimum probability to include (default: 0.1) */
-  minProbability?: number
-  /** Maximum results to return (default: 10) */
-  maxResults?: number
-  /** Whether to spread bidirectionally (default: true) */
-  bidirectional?: boolean
+	/** Decay rate for base-level activation (default: 0.5) */
+	decayRate?: number
+	/** Retrieval threshold (default: 0.3) */
+	activationThreshold?: number
+	/** Noise parameter (default: 0.1) */
+	noiseParameter?: number
+	/** Spreading activation depth (default: 3) */
+	spreadingDepth?: number
+	/** Spreading decay per hop (default: 0.7) */
+	spreadingDecay?: number
+	/** Minimum probability to include (default: 0.1) */
+	minProbability?: number
+	/** Maximum results to return (default: 10) */
+	maxResults?: number
+	/** Whether to spread bidirectionally (default: true) */
+	bidirectional?: boolean
 }
+
+/** Compute association strength with multiplier based on context. */
+export declare function locationAssociationStrength(
+	currentCount: number,
+	sameTask: boolean,
+	sameActivity: boolean,
+	config?: JsLocationConfig | undefined | null
+): number
+
+/**
+ * Compute decayed familiarity for multiple locations.
+ *
+ * Returns new familiarity values in the same order as input.
+ */
+export declare function locationBatchDecay(
+	locations: Array<JsLocationIntuition>,
+	currentTimeMs: number,
+	config?: JsLocationConfig | undefined | null
+): Array<number>
+
+/**
+ * Compute familiarity for a given access count.
+ *
+ * Uses asymptotic curve: f(n) = 1 - 1/(1 + k*n)
+ */
+export declare function locationComputeFamiliarity(
+	accessCount: number,
+	config?: JsLocationConfig | undefined | null
+): number
+
+/** Get locations associated with a given location, sorted by strength. */
+export declare function locationGetAssociated(
+	locationId: number,
+	associations: Array<JsLocationAssociation>,
+	limit: number
+): Array<JsAssociatedLocation>
+
+/**
+ * Infer activity type from context string and optional tool name.
+ *
+ * Precedence: explicit > keyword > tool > default
+ */
+export declare function locationInferActivity(
+	context: string,
+	toolName?: string | undefined | null,
+	explicitType?: string | undefined | null
+): JsActivityInference
+
+/** Check if a location is well-known based on familiarity threshold. */
+export declare function locationIsWellKnown(
+	familiarity: number,
+	config?: JsLocationConfig | undefined | null
+): boolean
 
 /**
  * Apply nonlinear activation (MINERVA 2's cubic function).
@@ -76,7 +219,11 @@ export declare function nonlinearActivation(similarity: number): number
  *
  * P(retrieval) = 1 / (1 + e^((τ - A) / s))
  */
-export declare function retrievalProbability(activation: number, threshold: number, noise: number): number
+export declare function retrievalProbability(
+	activation: number,
+	threshold: number,
+	noise: number
+): number
 
 /**
  * Full retrieval pipeline using ACT-R spreading activation and MINERVA 2.
@@ -98,7 +245,16 @@ export declare function retrievalProbability(activation: number, threshold: numb
  * * `associations` - Optional association graph edges
  * * `config` - Optional retrieval configuration
  */
-export declare function retrieve(probeEmbedding: Array<number>, memoryEmbeddings: Array<Array<number>>, accessHistoriesMs: Array<Array<number>>, emotionalWeights: Array<number>, decayRates: Array<number>, currentTimeMs: number, associations?: Array<JsAssociation> | undefined | null, config?: JsRetrievalConfig | undefined | null): Array<JsRetrievalCandidate>
+export declare function retrieve(
+	probeEmbedding: Array<number>,
+	memoryEmbeddings: Array<Array<number>>,
+	accessHistoriesMs: Array<Array<number>>,
+	emotionalWeights: Array<number>,
+	decayRates: Array<number>,
+	currentTimeMs: number,
+	associations?: Array<JsAssociation> | undefined | null,
+	config?: JsRetrievalConfig | undefined | null
+): Array<JsRetrievalCandidate>
 
 /** Library version */
 export declare function version(): string
