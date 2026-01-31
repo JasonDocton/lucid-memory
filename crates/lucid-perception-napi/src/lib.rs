@@ -4,7 +4,8 @@
 
 // napi-rs requires owned types at the FFI boundary
 #![allow(clippy::needless_pass_by_value)]
-#![allow(clippy::cast_possible_truncation)]
+// napi-rs macro generates trailing_empty_array in FFI types - this is unavoidable
+#![allow(clippy::trailing_empty_array)]
 
 use std::path::PathBuf;
 
@@ -265,14 +266,12 @@ pub async fn video_process(
 /// Check if Whisper model is available.
 #[napi]
 pub fn video_is_model_available(model_path: Option<String>) -> bool {
-	let config = if let Some(path) = model_path {
+	let config = model_path.map_or_else(TranscriptionConfig::default, |path| {
 		TranscriptionConfig {
 			model_path: PathBuf::from(path),
 			..Default::default()
 		}
-	} else {
-		TranscriptionConfig::default()
-	};
+	});
 
 	lucid_perception::transcribe::is_model_available(&config)
 }

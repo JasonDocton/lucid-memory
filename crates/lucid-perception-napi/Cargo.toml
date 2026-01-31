@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Node.js bindings for lucid-perception video processing"
+readme = "../../README.md"
 repository.workspace = true
+
+keywords = ["napi", "nodejs", "video", "perception", "bindings"]
+categories = ["api-bindings", "multimedia::video"]
 
 [lib]
 crate-type = ["cdylib"]

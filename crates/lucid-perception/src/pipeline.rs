@@ -108,7 +108,12 @@ pub struct ProcessingStats {
 
 /// Process a video file, extracting frames and optionally transcribing.
 ///
-/// This runs frame extraction and transcription in parallel using tokio::join!.
+/// This runs frame extraction and transcription in parallel using `tokio::join!`.
+///
+/// # Errors
+///
+/// Returns an error if video metadata cannot be read, frame extraction fails,
+/// or transcription fails (when enabled).
 #[instrument(skip_all, fields(video = %video_path.as_ref().display()))]
 pub async fn process_video(
 	video_path: impl AsRef<Path>,
@@ -137,7 +142,9 @@ pub async fn process_video(
 		let frames_task = async {
 			let start = std::time::Instant::now();
 			let result = extract_frames(video_path, &config.video).await;
-			(result, start.elapsed().as_millis() as u64)
+			#[allow(clippy::cast_possible_truncation)]
+			let elapsed = start.elapsed().as_millis() as u64;
+			(result, elapsed)
 		};
 
 		let transcript_task = async {
@@ -152,6 +159,7 @@ pub async fn process_video(
 
 				let start = std::time::Instant::now();
 				let result = transcribe_video(&video_path_clone, t_config).await;
+				#[allow(clippy::cast_possible_truncation)]
 				let elapsed = start.elapsed().as_millis() as u64;
 
 				match result {
@@ -171,7 +179,9 @@ pub async fn process_video(
 	let frames_result = {
 		let start = std::time::Instant::now();
 		let result = extract_frames(video_path, &config.video).await;
-		(result, start.elapsed().as_millis() as u64)
+		#[allow(clippy::cast_possible_truncation)]
+		let elapsed = start.elapsed().as_millis() as u64;
+		(result, elapsed)
 	};
 
 	// Process frame extraction result
@@ -200,7 +210,10 @@ pub async fn process_video(
 			})
 			.collect()
 	};
-	stats.scene_detection_time_ms = scene_start.elapsed().as_millis() as u64;
+	#[allow(clippy::cast_possible_truncation)]
+	{
+		stats.scene_detection_time_ms = scene_start.elapsed().as_millis() as u64;
+	}
 
 	stats.scene_changes = frame_candidates
 		.iter()
@@ -241,19 +254,23 @@ pub async fn process_video(
 	})
 }
 
-/// Synchronous wrapper for process_video (blocks the current thread).
+/// Synchronous wrapper for `process_video` (blocks the current thread).
 ///
 /// Use this when calling from a synchronous context. For async code,
 /// prefer `process_video` directly.
+///
+/// # Errors
+///
+/// Returns an error if the tokio runtime cannot be created, or if video
+/// processing fails.
 pub fn process_video_sync(
 	video_path: impl AsRef<Path>,
 	config: &PipelineConfig,
 ) -> Result<VideoProcessingOutput> {
 	let runtime = tokio::runtime::Runtime::new().map_err(|e| {
-		PerceptionError::IoError(std::io::Error::new(
-			std::io::ErrorKind::Other,
-			format!("Failed to create runtime: {e}"),
-		))
+		PerceptionError::IoError(std::io::Error::other(format!(
+			"Failed to create runtime: {e}"
+		)))
 	})?;
 
 	runtime.block_on(process_video(video_path, config))

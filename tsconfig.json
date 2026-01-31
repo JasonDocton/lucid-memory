@@ -22,12 +22,12 @@
 		"incremental": true,
 		"jsxImportSource": "react",
 		"outDir": "./dist",
-		"rootDir": "./src",
+		"rootDir": "./packages",
 		"paths": {
-			"@/*": ["./src/*"]
+			"@/*": ["./packages/*"]
 		},
 		"strictNullChecks": true
 	},
-	"include": ["src/**/*"],
+	"include": ["packages/**/*"],
 	"exclude": ["node_modules", "dist", ".*"]
 }

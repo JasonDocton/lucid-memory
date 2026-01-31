@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Video processing for lucid-memory: frame extraction, scene detection, and audio transcription"
+readme = "../../README.md"
 repository.workspace = true
+
+keywords = ["video", "perception", "frame-extraction", "scene-detection", "ai"]
+categories = ["multimedia::video", "science"]
 
 [dependencies]
 # Serialization

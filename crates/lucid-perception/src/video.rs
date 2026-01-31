@@ -1,11 +1,11 @@
-//! Video frame extraction using FFmpeg CLI.
+//! Video frame extraction using `FFmpeg` CLI.
 //!
-//! This module provides frame extraction from videos using FFmpeg as an external process.
-//! FFmpeg is preferred over linked libraries for:
+//! This module provides frame extraction from videos using `FFmpeg` as an external process.
+//! `FFmpeg` is preferred over linked libraries for:
 //! - Simplicity and reliability
 //! - No complex build dependencies
 //! - Consistent behavior across platforms
-//! - Support for all video formats FFmpeg supports
+//! - Support for all video formats `FFmpeg` supports
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -75,7 +75,7 @@ impl ImageFormat {
 		}
 	}
 
-	/// Get the FFmpeg codec name for this format.
+	/// Get the `FFmpeg` codec name for this format.
 	#[must_use]
 	pub const fn codec(&self) -> &'static str {
 		match self {
@@ -114,7 +114,7 @@ pub struct VideoMetadata {
 	pub has_audio: bool,
 }
 
-/// Raw FFprobe stream data.
+/// Raw `FFprobe` stream data.
 #[derive(Debug, Deserialize)]
 struct FfprobeStream {
 	codec_type: String,
@@ -132,14 +132,14 @@ struct FfprobeStream {
 	codec_name: Option<String>,
 }
 
-/// Raw FFprobe format data.
+/// Raw `FFprobe` format data.
 #[derive(Debug, Deserialize)]
 struct FfprobeFormat {
 	#[serde(default)]
 	duration: Option<String>,
 }
 
-/// Raw FFprobe output.
+/// Raw `FFprobe` output.
 #[derive(Debug, Deserialize)]
 struct FfprobeOutput {
 	streams: Vec<FfprobeStream>,
@@ -171,7 +171,11 @@ pub struct ExtractedFrame {
 // FFmpeg Detection
 // ============================================================================
 
-/// Check if FFmpeg is available in PATH.
+/// Check if `FFmpeg` is available in PATH.
+///
+/// # Errors
+///
+/// Returns `FfmpegNotFound` if `FFmpeg` is not installed or not in PATH.
 #[instrument]
 pub async fn check_ffmpeg() -> Result<()> {
 	let output = Command::new("ffmpeg")
@@ -187,7 +191,11 @@ pub async fn check_ffmpeg() -> Result<()> {
 	}
 }
 
-/// Check if FFprobe is available in PATH.
+/// Check if `FFprobe` is available in PATH.
+///
+/// # Errors
+///
+/// Returns `FfprobeNotFound` if `FFprobe` is not installed or not in PATH.
 #[instrument]
 pub async fn check_ffprobe() -> Result<()> {
 	let output = Command::new("ffprobe")
@@ -208,6 +216,10 @@ pub async fn check_ffprobe() -> Result<()> {
 // ============================================================================
 
 /// Get metadata about a video file.
+///
+/// # Errors
+///
+/// Returns an error if the video file is not found, invalid, or `FFprobe` fails.
 #[instrument(skip_all, fields(video = %video_path.as_ref().display()))]
 pub async fn get_video_metadata(video_path: impl AsRef<Path>) -> Result<VideoMetadata> {
 	let video_path = video_path.as_ref();
@@ -287,6 +299,11 @@ pub async fn get_video_metadata(video_path: impl AsRef<Path>) -> Result<VideoMet
 		.unwrap_or(30.0);
 
 	// Parse frame count
+	#[allow(
+		clippy::cast_possible_truncation,
+		clippy::cast_sign_loss,
+		clippy::unnecessary_lazy_evaluations
+	)]
 	let frame_count = video_stream
 		.nb_frames
 		.as_ref()
@@ -312,6 +329,10 @@ pub async fn get_video_metadata(video_path: impl AsRef<Path>) -> Result<VideoMet
 // ============================================================================
 
 /// Extract a single frame at a specific timestamp.
+///
+/// # Errors
+///
+/// Returns an error if the video is not found or frame extraction fails.
 #[instrument(skip_all, fields(video = %video_path.as_ref().display(), timestamp = timestamp_seconds))]
 pub async fn extract_frame_at(
 	video_path: impl AsRef<Path>,
@@ -371,6 +392,10 @@ pub async fn extract_frame_at(
 }
 
 /// Extract frames at regular intervals.
+///
+/// # Errors
+///
+/// Returns an error if the video is not found or frame extraction fails.
 #[instrument(skip_all, fields(video = %video_path.as_ref().display()))]
 pub async fn extract_frames(
 	video_path: impl AsRef<Path>,
@@ -392,11 +417,10 @@ pub async fn extract_frames(
 	// Generate unique prefix for this extraction
 	let prefix = uuid::Uuid::new_v4();
 
-	let mut frames = Vec::new();
-
-	if config.keyframes_only {
+	#[allow(clippy::if_not_else)]
+	let frames = if config.keyframes_only {
 		// Extract keyframes only using select filter
-		frames = extract_keyframes_internal(video_path, config, &prefix, &metadata).await?;
+		extract_keyframes_internal(video_path, config, &prefix, &metadata).await?
 	} else {
 		// Extract at regular intervals
 		let interval = if config.interval_seconds > 0.0 {
@@ -407,23 +431,23 @@ pub async fn extract_frames(
 
 		let mut timestamp = 0.0;
 		let mut frame_number = 0u32;
+		let mut extracted = Vec::new();
 
+		#[allow(clippy::while_float)]
 		while timestamp < metadata.duration_seconds {
-			if config.max_frames > 0 && frames.len() >= config.max_frames {
+			if config.max_frames > 0 && extracted.len() >= config.max_frames {
 				break;
 			}
 
 			let output_path = config.output_dir.join(format!(
-				"{}-{:05}.{}",
-				prefix,
-				frame_number,
+				"{prefix}-{frame_number:05}.{}",
 				config.format.extension()
 			));
 
 			match extract_frame_at(video_path, timestamp, &output_path, config.quality).await {
 				Ok(mut frame) => {
 					frame.frame_number = frame_number;
-					frames.push(frame);
+					extracted.push(frame);
 				}
 				Err(e) => {
 					warn!(?e, timestamp, "Failed to extract frame, skipping");
@@ -433,7 +457,8 @@ pub async fn extract_frames(
 			timestamp += interval;
 			frame_number += 1;
 		}
-	}
+		extracted
+	};
 
 	debug!(count = frames.len(), "Extracted frames");
 	Ok(frames)
@@ -491,7 +516,7 @@ async fn extract_keyframes_internal(
 	let mut frames = Vec::new();
 	let mut entries = tokio::fs::read_dir(&config.output_dir).await?;
 
-	let prefix_str = format!("{}-keyframe-", prefix);
+	let prefix_str = format!("{prefix}-keyframe-");
 
 	while let Some(entry) = entries.next_entry().await? {
 		let name = entry.file_name();
@@ -506,12 +531,13 @@ async fn extract_keyframes_internal(
 				if let Ok(frame_number) = num_part.parse::<u32>() {
 					// Estimate timestamp based on frame number
 					// This is approximate since FFmpeg doesn't output timestamps directly
+					#[allow(clippy::cast_precision_loss)]
 					let timestamp = if metadata.frame_rate > 0.0 && metadata.duration_seconds > 0.0
 					{
 						// Rough estimate: keyframes are roughly evenly distributed
 						let keyframe_interval =
 							metadata.duration_seconds / (frames.len() + 1) as f64;
-						frame_number as f64 * keyframe_interval
+						f64::from(frame_number) * keyframe_interval
 					} else {
 						0.0
 					};
@@ -532,6 +558,7 @@ async fn extract_keyframes_internal(
 
 	// Update timestamps based on actual count
 	let count = frames.len();
+	#[allow(clippy::cast_precision_loss)]
 	if count > 0 && metadata.duration_seconds > 0.0 {
 		let interval = metadata.duration_seconds / count as f64;
 		for (i, frame) in frames.iter_mut().enumerate() {

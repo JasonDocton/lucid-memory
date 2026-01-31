@@ -5,11 +5,11 @@ use std::path::PathBuf;
 /// Errors that can occur during perception operations.
 #[derive(Debug, thiserror::Error)]
 pub enum PerceptionError {
-	/// FFmpeg is not installed or not found in PATH.
+	/// `FFmpeg` is not installed or not found in PATH.
 	#[error("FFmpeg not found. Please install FFmpeg: https://ffmpeg.org/download.html")]
 	FfmpegNotFound,
 
-	/// FFprobe is not installed or not found in PATH.
+	/// `FFprobe` is not installed or not found in PATH.
 	#[error("FFprobe not found. Please install FFmpeg: https://ffmpeg.org/download.html")]
 	FfprobeNotFound,
 
@@ -21,10 +21,10 @@ pub enum PerceptionError {
 	#[error("Invalid or unsupported video format: {0}")]
 	InvalidVideo(PathBuf),
 
-	/// FFmpeg command failed.
+	/// `FFmpeg` command failed.
 	#[error("FFmpeg failed: {message}")]
 	FfmpegError {
-		/// Error message from FFmpeg
+		/// Error message from `FFmpeg`
 		message: String,
 		/// Exit code if available
 		exit_code: Option<i32>,
@@ -84,13 +84,13 @@ pub enum PerceptionError {
 impl PerceptionError {
 	/// Check if this error indicates no audio stream (not a fatal error for some operations).
 	#[must_use]
-	pub fn is_no_audio(&self) -> bool {
+	pub const fn is_no_audio(&self) -> bool {
 		matches!(self, Self::NoAudioStream(_))
 	}
 
-	/// Check if this error is due to a missing dependency (FFmpeg, Whisper model).
+	/// Check if this error is due to a missing dependency (`FFmpeg`, Whisper model).
 	#[must_use]
-	pub fn is_missing_dependency(&self) -> bool {
+	pub const fn is_missing_dependency(&self) -> bool {
 		matches!(self, Self::FfmpegNotFound | Self::FfprobeNotFound) || {
 			#[cfg(feature = "transcription")]
 			{
@@ -105,7 +105,7 @@ impl PerceptionError {
 
 	/// Check if the error is recoverable (e.g., try again later).
 	#[must_use]
-	pub fn is_recoverable(&self) -> bool {
+	pub const fn is_recoverable(&self) -> bool {
 		matches!(self, Self::Timeout { .. } | Self::Cancelled)
 	}
 }

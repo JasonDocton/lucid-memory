@@ -68,7 +68,7 @@ fn default_model_path() -> PathBuf {
 
 /// Get the URL to download the default model.
 #[must_use]
-pub fn get_model_download_url() -> &'static str {
+pub const fn get_model_download_url() -> &'static str {
 	"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
 }
 
@@ -101,18 +101,21 @@ pub struct TranscriptSegment {
 impl TranscriptSegment {
 	/// Get start time in seconds.
 	#[must_use]
+	#[allow(clippy::cast_precision_loss)]
 	pub fn start_seconds(&self) -> f64 {
 		self.start_ms as f64 / 1000.0
 	}
 
 	/// Get end time in seconds.
 	#[must_use]
+	#[allow(clippy::cast_precision_loss)]
 	pub fn end_seconds(&self) -> f64 {
 		self.end_ms as f64 / 1000.0
 	}
 
 	/// Get duration in seconds.
 	#[must_use]
+	#[allow(clippy::cast_precision_loss)]
 	pub fn duration_seconds(&self) -> f64 {
 		(self.end_ms - self.start_ms) as f64 / 1000.0
 	}
@@ -222,6 +225,11 @@ async fn extract_audio(video_path: impl AsRef<Path>, output_path: impl AsRef<Pat
 // ============================================================================
 
 /// Transcribe audio from a video file.
+///
+/// # Errors
+///
+/// Returns an error if the Whisper model is not found, audio extraction fails,
+/// or transcription fails.
 #[instrument(skip_all, fields(video = %video_path.as_ref().display()))]
 pub async fn transcribe_video(
 	video_path: impl AsRef<Path>,
@@ -279,8 +287,7 @@ fn transcribe_audio_sync(
 	let audio_data = std::fs::read(audio_path)?;
 
 	// Parse WAV header and get samples
-	let samples =
-		parse_wav_samples(&audio_data).map_err(|e| PerceptionError::TranscriptionFailed(e))?;
+	let samples = parse_wav_samples(&audio_data).map_err(PerceptionError::TranscriptionFailed)?;
 
 	// Create state
 	let mut state = ctx.create_state().map_err(|e| {
@@ -297,6 +304,7 @@ fn transcribe_audio_sync(
 
 	// Set thread count
 	if config.threads > 0 {
+		#[allow(clippy::cast_possible_wrap)]
 		params.set_n_threads(config.threads as i32);
 	}
 
@@ -318,17 +326,18 @@ fn transcribe_audio_sync(
 		PerceptionError::TranscriptionFailed(format!("Failed to get segment count: {e}"))
 	})?;
 
+	#[allow(clippy::cast_sign_loss)]
 	let mut segments = Vec::with_capacity(num_segments as usize);
 	let mut full_text = String::new();
 
 	for i in 0..num_segments {
 		let start_ms = state.full_get_segment_t0(i).map_err(|e| {
 			PerceptionError::TranscriptionFailed(format!("Failed to get segment start: {e}"))
-		})? as i64 * 10; // whisper uses 10ms units
+		})? * 10; // whisper uses 10ms units
 
 		let end_ms = state.full_get_segment_t1(i).map_err(|e| {
 			PerceptionError::TranscriptionFailed(format!("Failed to get segment end: {e}"))
-		})? as i64 * 10;
+		})? * 10;
 
 		let text = state.full_get_segment_text(i).map_err(|e| {
 			PerceptionError::TranscriptionFailed(format!("Failed to get segment text: {e}"))
@@ -351,6 +360,7 @@ fn transcribe_audio_sync(
 		}
 	}
 
+	#[allow(clippy::cast_precision_loss)]
 	let duration_seconds = samples.len() as f64 / 16000.0;
 
 	Ok(TranscriptionResult {
@@ -377,6 +387,7 @@ fn parse_wav_samples(data: &[u8]) -> std::result::Result<Vec<f32>, String> {
 	let mut pos = 12;
 	while pos + 8 < data.len() {
 		let chunk_id = &data[pos..pos + 4];
+		#[allow(clippy::cast_possible_truncation)]
 		let chunk_size =
 			u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
 				as usize;
@@ -391,7 +402,7 @@ fn parse_wav_samples(data: &[u8]) -> std::result::Result<Vec<f32>, String> {
 				.chunks_exact(2)
 				.map(|chunk| {
 					let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-					sample as f32 / 32768.0
+					f32::from(sample) / 32768.0
 				})
 				.collect();
 

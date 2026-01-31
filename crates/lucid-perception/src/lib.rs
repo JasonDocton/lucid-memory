@@ -11,7 +11,7 @@
 //!
 //! ## Features
 //!
-//! - **Frame Extraction**: Extract frames from videos using FFmpeg CLI
+//! - **Frame Extraction**: Extract frames from videos using `FFmpeg` CLI
 //! - **Scene Detection**: Detect scene changes using perceptual hashing
 //! - **Transcription**: Transcribe audio using Whisper (optional)
 //! - **Pipeline**: Parallel processing of video analysis tasks

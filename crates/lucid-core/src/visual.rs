@@ -574,12 +574,12 @@ impl VisualConsolidationState {
 	/// Update consolidation state based on current time.
 	pub fn update(&mut self, current_time_ms: f64) {
 		if let Some(ref window) = self.window {
-			if !window.is_open(current_time_ms) {
+			if window.is_open(current_time_ms) {
+				self.strength = window.progress(current_time_ms);
+			} else {
 				self.state = ConsolidationState::Consolidated;
 				self.strength = 1.0;
 				self.window = None;
-			} else {
-				self.strength = window.progress(current_time_ms);
 			}
 		}
 	}
@@ -1140,11 +1140,13 @@ mod tests {
 		assert!(!should_prune(0.8, 100.0, false, false, &config));
 	}
 
+	const MS_PER_DAY: f64 = 1000.0 * 60.0 * 60.0 * 24.0;
+
 	#[test]
 	fn test_pruning_candidates() {
 		let config = VisualConfig::default();
-		let current_time = 1000.0 * 60.0 * 60.0 * 24.0 * 100.0; // Day 100
-		let old_time = current_time - (100.0 * 24.0 * 60.0 * 60.0 * 1000.0); // 100 days ago
+		let current_time = MS_PER_DAY * 100.0; // Day 100
+		let old_time = 0.0; // Day 0 (100 days ago from current_time)
 
 		let memories = vec![
 			VisualMemory {

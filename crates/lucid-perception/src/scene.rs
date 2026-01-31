@@ -64,7 +64,7 @@ pub struct PerceptualHash {
 }
 
 impl PerceptualHash {
-	/// Create from image_hasher's ImageHash.
+	/// Create from `image_hasher`'s `ImageHash`.
 	fn from_image_hash(hash: &ImageHash) -> Self {
 		let bytes = hash.as_bytes().to_vec();
 		let hex = hash.to_base64();
@@ -79,6 +79,10 @@ impl PerceptualHash {
 }
 
 /// Compute the perceptual hash of an image.
+///
+/// # Errors
+///
+/// Returns an error if the image cannot be read or decoded.
 #[instrument(skip_all, fields(path = %image_path.as_ref().display()))]
 pub fn compute_phash(image_path: impl AsRef<Path>) -> Result<PerceptualHash> {
 	let image_path = image_path.as_ref();
@@ -96,6 +100,10 @@ pub fn compute_phash(image_path: impl AsRef<Path>) -> Result<PerceptualHash> {
 }
 
 /// Compute perceptual hash with custom size.
+///
+/// # Errors
+///
+/// Returns an error if the image cannot be read or decoded.
 #[instrument(skip_all, fields(path = %image_path.as_ref().display(), size = hash_size))]
 pub fn compute_phash_sized(image_path: impl AsRef<Path>, hash_size: u32) -> Result<PerceptualHash> {
 	let image_path = image_path.as_ref();
@@ -158,6 +166,10 @@ pub struct FrameCandidate {
 /// Detect scene changes in a sequence of frames.
 ///
 /// Returns indices of frames where scene changes occur.
+///
+/// # Errors
+///
+/// Returns an error if any frame image cannot be read or hashed.
 #[instrument(skip_all, fields(num_frames = frames.len()))]
 pub fn detect_scene_changes(
 	frames: &[ExtractedFrame],
@@ -173,17 +185,17 @@ pub fn detect_scene_changes(
 	for frame in frames {
 		let hash = compute_phash_sized(&frame.path, config.hash_size)?;
 
-		let (is_scene_change, is_duplicate, distance) = match &previous_hash {
-			Some(prev) => {
+		let (is_scene_change, is_duplicate, distance) = previous_hash.as_ref().map_or(
+			(true, false, 0), // First frame is always a scene boundary
+			|prev| {
 				let dist = hash.distance(prev);
 				(
 					dist >= config.scene_threshold,
 					dist <= config.duplicate_threshold,
 					dist,
 				)
-			}
-			None => (true, false, 0), // First frame is always a scene boundary
-		};
+			},
+		);
 
 		debug!(
 			frame = frame.frame_number,
@@ -273,6 +285,7 @@ fn find_scene_representative(scene_frames: &[FrameCandidate]) -> Option<&FrameCa
 			.map(|(_, other)| frame.hash.distance(&other.hash))
 			.sum();
 
+		#[allow(clippy::cast_possible_truncation)]
 		let avg_distance = total_distance / (scene_frames.len() - 1) as u32;
 
 		if avg_distance < min_avg_distance {
