@@ -121,6 +121,22 @@ $NC = "$e[0m"
 $DIM = "$e[2m"
 $BOLD = "$e[1m"
 
+# Add Python user Scripts directories to PATH for detection (pip --user installs go here)
+# Windows: %APPDATA%\Python\PythonXX\Scripts
+$PythonVersions = @("313", "312", "311", "310", "39", "38")
+foreach ($pyver in $PythonVersions) {
+    $PyScriptsPath = "$env:APPDATA\Python\Python$pyver\Scripts"
+    if (Test-Path $PyScriptsPath) {
+        $env:PATH = "$PyScriptsPath;$env:PATH"
+        break
+    }
+}
+# Also check the standard user site-packages location
+$PyUserScripts = "$env:APPDATA\Python\Scripts"
+if (Test-Path $PyUserScripts) {
+    $env:PATH = "$PyUserScripts;$env:PATH"
+}
+
 $InstallList = @()
 $NeedBun = -not (Get-Command bun -ErrorAction SilentlyContinue)
 $NeedFfmpeg = -not (Get-Command ffmpeg -ErrorAction SilentlyContinue)
@@ -222,6 +238,15 @@ if ($NeedYtdlp) {
         # Might throw but still install
     }
 
+    # Add Python Scripts to PATH for detection
+    foreach ($pyver in @("313", "312", "311", "310", "39", "38")) {
+        $PyScriptsPath = "$env:APPDATA\Python\Python$pyver\Scripts"
+        if (Test-Path $PyScriptsPath) {
+            $env:PATH = "$PyScriptsPath;$env:PATH"
+            break
+        }
+    }
+
     if ($YtdlpInstalled -or (Get-Command yt-dlp -ErrorAction SilentlyContinue)) {
         Write-Success "yt-dlp installed"
     } else {
@@ -250,6 +275,15 @@ if ($NeedWhisper) {
         $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
     } catch {
         # Might throw but still install
+    }
+
+    # Add Python Scripts to PATH for detection
+    foreach ($pyver in @("313", "312", "311", "310", "39", "38")) {
+        $PyScriptsPath = "$env:APPDATA\Python\Python$pyver\Scripts"
+        if (Test-Path $PyScriptsPath) {
+            $env:PATH = "$PyScriptsPath;$env:PATH"
+            break
+        }
     }
 
     if ($WhisperInstalled -or (Get-Command whisper -ErrorAction SilentlyContinue)) {
