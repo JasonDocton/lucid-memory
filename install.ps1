@@ -781,6 +781,42 @@ Show-Progress  # Step 7: Install hooks & PATH
 Pop-Location
 Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
 
+# === Post-Installation Verification ===
+
+$InstallErrors = @()
+
+# Check critical files exist
+if (-not (Test-Path "$LucidDir\server\src\server.ts")) {
+    $InstallErrors += "Server script missing"
+}
+
+if (-not (Test-Path "$LucidBin\lucid-server.cmd")) {
+    $InstallErrors += "Server launcher missing"
+}
+
+if (-not (Test-Path "$LucidBin\lucid.cmd")) {
+    $InstallErrors += "CLI missing"
+}
+
+if (-not (Test-Path $McpConfig)) {
+    $InstallErrors += "MCP config not created"
+}
+
+# Check Bun is available
+if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+    $InstallErrors += "Bun not in PATH (restart terminal)"
+}
+
+if ($InstallErrors.Count -gt 0) {
+    Write-Host ""
+    Write-Warn "Installation completed with issues:"
+    foreach ($err in $InstallErrors) {
+        Write-Host "  - $err"
+    }
+    Write-Host ""
+    Write-Host "Run 'lucid status' after restarting your terminal to diagnose."
+}
+
 # === Restart Claude Code ===
 
 Write-Host ""

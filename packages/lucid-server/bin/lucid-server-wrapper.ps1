@@ -4,6 +4,20 @@
 $ServerScript = "$env:USERPROFILE\.lucid\server\src\server.ts"
 $LogDir = "$env:USERPROFILE\.lucid\logs"
 $LogFile = "$LogDir\server.log"
+
+# Verify Bun is available
+if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+    Write-Error "Bun is not installed or not in PATH"
+    Write-Error "Please install Bun: irm bun.sh/install.ps1 | iex"
+    exit 1
+}
+
+# Verify server script exists
+if (-not (Test-Path $ServerScript)) {
+    Write-Error "Server script not found at $ServerScript"
+    Write-Error "Please reinstall Lucid Memory: irm lucidmemory.dev/install.ps1 | iex"
+    exit 1
+}
 $RestartDelay = 2
 $MaxRapidRestarts = 5
 $RapidRestartWindow = 60  # seconds

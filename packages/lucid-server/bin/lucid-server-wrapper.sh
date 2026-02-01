@@ -5,6 +5,20 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVER_SCRIPT="$HOME/.lucid/server/src/server.ts"
 LOG_FILE="$HOME/.lucid/logs/server.log"
+
+# Verify Bun is available
+if ! command -v bun &> /dev/null; then
+    echo "ERROR: Bun is not installed or not in PATH" >&2
+    echo "Please install Bun: curl -fsSL https://bun.sh/install | bash" >&2
+    exit 1
+fi
+
+# Verify server script exists
+if [ ! -f "$SERVER_SCRIPT" ]; then
+    echo "ERROR: Server script not found at $SERVER_SCRIPT" >&2
+    echo "Please reinstall Lucid Memory: curl -fsSL lucidmemory.dev/install | bash" >&2
+    exit 1
+fi
 RESTART_DELAY=2
 MAX_RAPID_RESTARTS=5
 RAPID_RESTART_WINDOW=60  # seconds

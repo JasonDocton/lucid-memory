@@ -224,10 +224,36 @@ async function main() {
 			}
 			console.log("")
 
+			// Video processing dependencies
+			console.log("Video Processing:")
+			const { execSync } = await import("node:child_process")
+
+			const checkCommand = (cmd: string): boolean => {
+				try {
+					execSync(`which ${cmd} 2>/dev/null || where ${cmd} 2>nul`, {
+						stdio: "pipe",
+					})
+					return true
+				} catch {
+					return false
+				}
+			}
+
+			const hasFfmpeg = checkCommand("ffmpeg")
+			const hasYtdlp = checkCommand("yt-dlp")
+			const hasWhisper = checkCommand("whisper")
+
+			console.log(`  ffmpeg: ${hasFfmpeg ? "✓ installed" : "✗ missing"}`)
+			console.log(`  yt-dlp: ${hasYtdlp ? "✓ installed" : "✗ missing"}`)
+			console.log(`  whisper: ${hasWhisper ? "✓ installed" : "✗ missing"}`)
+			console.log("")
+
 			// Overall health
+			const videoHealthy = hasFfmpeg && hasYtdlp && hasWhisper
 			const healthy =
 				hasEmbeddings &&
-				(isOllamaHealthy || embeddingConfig?.provider === "openai")
+				(isOllamaHealthy || embeddingConfig?.provider === "openai") &&
+				videoHealthy
 			if (healthy) {
 				console.log("Overall: ✓ Healthy")
 			} else {
@@ -241,6 +267,15 @@ async function main() {
 					console.log(
 						"  - Or check if the model is installed: ollama pull nomic-embed-text"
 					)
+				}
+				if (!hasFfmpeg) {
+					console.log("  - ffmpeg missing. Install with: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)")
+				}
+				if (!hasYtdlp) {
+					console.log("  - yt-dlp missing. Install with: pip install yt-dlp")
+				}
+				if (!hasWhisper) {
+					console.log("  - whisper missing. Install with: pip install openai-whisper")
 				}
 			}
 			break

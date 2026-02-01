@@ -670,7 +670,14 @@ fi
 # Copy the server
 if [ -d "lucid-memory/packages/lucid-server" ]; then
     rm -rf "$LUCID_DIR/server" 2>/dev/null || true
-    cp -r "lucid-memory/packages/lucid-server" "$LUCID_DIR/server"
+    if ! cp -r "lucid-memory/packages/lucid-server" "$LUCID_DIR/server"; then
+        fail "Failed to copy server files" \
+            "Could not copy server to $LUCID_DIR/server"
+    fi
+    if [ ! -d "$LUCID_DIR/server" ]; then
+        fail "Server installation failed" \
+            "Server directory not created at $LUCID_DIR/server"
+    fi
 else
     fail "Invalid repository structure" \
         "The downloaded repository is missing required files."
@@ -1270,6 +1277,40 @@ show_progress  # Step 7: Install hooks & PATH
 # === Cleanup ===
 
 rm -rf "$TEMP_DIR"
+
+# === Post-Installation Verification ===
+
+INSTALL_ERRORS=""
+
+# Check critical files exist
+if [ ! -f "$LUCID_DIR/server/src/server.ts" ]; then
+    INSTALL_ERRORS="${INSTALL_ERRORS}\n  - Server script missing"
+fi
+
+if [ ! -x "$LUCID_BIN/lucid-server" ]; then
+    INSTALL_ERRORS="${INSTALL_ERRORS}\n  - Server launcher missing"
+fi
+
+if [ ! -x "$LUCID_BIN/lucid" ]; then
+    INSTALL_ERRORS="${INSTALL_ERRORS}\n  - CLI missing"
+fi
+
+if [ ! -f "$MCP_CONFIG" ]; then
+    INSTALL_ERRORS="${INSTALL_ERRORS}\n  - MCP config not created"
+fi
+
+# Check Bun is available
+if ! command -v bun &> /dev/null; then
+    INSTALL_ERRORS="${INSTALL_ERRORS}\n  - Bun not in PATH (restart terminal)"
+fi
+
+if [ -n "$INSTALL_ERRORS" ]; then
+    echo ""
+    warn "Installation completed with issues:"
+    echo -e "$INSTALL_ERRORS"
+    echo ""
+    echo "Run 'lucid status' after restarting your terminal to diagnose."
+fi
 
 # === Restart Claude Code ===
 
