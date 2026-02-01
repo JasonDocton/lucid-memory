@@ -1,6 +1,6 @@
 {
 	"name": "@lucid-memory/perception",
-	"version": "0.3.5",
+	"version": "0.3.6",
 	"description": "Video processing for lucid-memory: frame extraction, scene detection, and transcription",
 	"main": "index.js",
 	"types": "index.d.ts",
