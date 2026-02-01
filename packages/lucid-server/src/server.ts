@@ -1673,6 +1673,48 @@ server.tool(
 	}
 )
 
+/**
+ * Check for updates in the background (non-blocking).
+ * Logs a message if a newer version is available.
+ */
+async function checkForUpdates(): Promise<void> {
+	const REPO = "JasonDocton/lucid-memory"
+	const LUCID_DIR = `${process.env.HOME}/.lucid`
+
+	try {
+		// Get current version
+		let currentVersion = "0.0.0"
+		try {
+			const pkgPath = `${LUCID_DIR}/server/package.json`
+			const pkg = await Bun.file(pkgPath).json()
+			currentVersion = pkg.version || "0.0.0"
+		} catch {
+			return // Can't determine current version
+		}
+
+		// Check latest version from GitHub (with short timeout)
+		const pkgResponse = await fetch(
+			`https://raw.githubusercontent.com/${REPO}/main/packages/lucid-server/package.json`,
+			{ signal: AbortSignal.timeout(5000) }
+		)
+
+		if (pkgResponse.ok) {
+			const remotePkg = await pkgResponse.json()
+			const latestVersion = remotePkg.version || "0.0.0"
+
+			// Simple version comparison (works for semver)
+			if (latestVersion !== currentVersion && latestVersion > currentVersion) {
+				console.error(
+					`[lucid] ⬆️  Update available: ${currentVersion} → ${latestVersion}`
+				)
+				console.error("[lucid]    Run 'lucid update' to install")
+			}
+		}
+	} catch {
+		// Silently ignore update check failures - not critical
+	}
+}
+
 // === Start Server ===
 async function main(): Promise<void> {
 	console.error("[lucid] Starting Lucid Memory MCP server...")
@@ -1684,6 +1726,9 @@ async function main(): Promise<void> {
 	startBackgroundEmbeddingProcessor()
 	startBackgroundVisualEmbeddingProcessor()
 	startBackgroundDecayProcessor()
+
+	// Check for updates in background (non-blocking)
+	checkForUpdates()
 
 	// Now connect to transport
 	const transport = new StdioServerTransport()
