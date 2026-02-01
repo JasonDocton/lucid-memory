@@ -510,7 +510,8 @@ $Pkg | ConvertTo-Json -Depth 10 | Out-File -FilePath $PkgPath -Encoding UTF8
 
 Write-Host "Installing dependencies..."
 try {
-    bun install --production 2>$null
+    bun install 2>$null
+    if (-not $?) { throw "bun install failed" }
 } catch {
     Write-Fail "Failed to install dependencies" "Bun package installation failed. Check your internet connection."
 }

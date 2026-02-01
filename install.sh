@@ -957,14 +957,9 @@ PYEOF
 fi
 
 echo "Installing dependencies..."
-# Show output so we can see errors - bun install can fail for various reasons
-if ! bun install --production; then
-    echo ""
-    warn "bun install failed, trying without --production flag..."
-    if ! bun install; then
-        fail "Failed to install dependencies" \
-            "Bun package installation failed.\n\nTry running manually:\n  cd ~/.lucid/server && bun install"
-    fi
+if ! bun install; then
+    fail "Failed to install dependencies" \
+        "Bun package installation failed.\n\nTry running manually:\n  cd ~/.lucid/server && bun install"
 fi
 
 # Create CLI wrapper
