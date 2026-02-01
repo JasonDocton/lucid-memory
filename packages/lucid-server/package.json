@@ -15,11 +15,9 @@
 	},
 	"dependencies": {
 		"@lucid-memory/native": "file:../lucid-native",
+		"@lucid-memory/perception": "file:../lucid-perception",
 		"@modelcontextprotocol/sdk": "^1.0.0",
 		"zod": "^3.23.0"
-	},
-	"optionalDependencies": {
-		"@lucid-memory/perception": "file:../lucid-perception"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",

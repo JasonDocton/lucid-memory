@@ -682,6 +682,12 @@ if [ -d "lucid-memory/packages/lucid-native" ]; then
     cp -r "lucid-memory/packages/lucid-native" "$LUCID_DIR/native"
 fi
 
+# Copy perception package (video processing)
+if [ -d "lucid-memory/packages/lucid-perception" ]; then
+    rm -rf "$LUCID_DIR/perception" 2>/dev/null || true
+    cp -r "lucid-memory/packages/lucid-perception" "$LUCID_DIR/perception"
+fi
+
 # Detect platform for pre-built binaries
 detect_native_binary() {
     local arch=$(uname -m)
@@ -779,6 +785,95 @@ else
     echo "  To get 100x faster retrieval, install Rust: https://rustup.rs"
 fi
 
+# === Set up Perception Module (Video Processing) ===
+
+detect_perception_binary() {
+    local arch=$(uname -m)
+    local os=$(uname -s)
+
+    case "$os" in
+        Darwin)
+            if [ "$arch" = "arm64" ]; then
+                echo "lucid-perception.darwin-arm64.node"
+            else
+                echo "lucid-perception.darwin-x64.node"
+            fi
+            ;;
+        Linux)
+            if [ "$arch" = "aarch64" ]; then
+                echo "lucid-perception.linux-arm64-gnu.node"
+            else
+                echo "lucid-perception.linux-x64-gnu.node"
+            fi
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
+PERCEPTION_BINARY=$(detect_perception_binary)
+PERCEPTION_READY=false
+
+# Check if pre-built binary exists in the repo
+if [ -n "$PERCEPTION_BINARY" ] && [ -d "$LUCID_DIR/perception" ] && [ -f "$LUCID_DIR/perception/$PERCEPTION_BINARY" ]; then
+    success "Pre-built perception binary found ($PERCEPTION_BINARY)"
+    PERCEPTION_READY=true
+fi
+
+# If no pre-built binary, try to download from latest release
+if [ "$PERCEPTION_READY" = false ] && [ -n "$PERCEPTION_BINARY" ] && [ -d "$LUCID_DIR/perception" ]; then
+    echo "Downloading pre-built perception binary..."
+    PERCEPTION_RELEASE_URL="https://github.com/JasonDocton/lucid-memory/releases/latest/download/$PERCEPTION_BINARY"
+    if curl -fsSL "$PERCEPTION_RELEASE_URL" -o "$LUCID_DIR/perception/$PERCEPTION_BINARY" 2>/dev/null; then
+        chmod +x "$LUCID_DIR/perception/$PERCEPTION_BINARY"
+        success "Downloaded perception binary"
+        PERCEPTION_READY=true
+    else
+        echo "  No pre-built perception binary available for download"
+    fi
+fi
+
+# If still no binary, try to build with Rust
+if [ "$PERCEPTION_READY" = false ] && [ -d "$LUCID_DIR/perception" ]; then
+    if command -v cargo &> /dev/null; then
+        echo "Building perception module (video processing)..."
+        cd "$LUCID_DIR/perception"
+
+        # Update the manifest path for installed location
+        if command -v jq &> /dev/null; then
+            jq '.scripts.build = "napi build --platform --release --manifest-path ../crates/lucid-perception-napi/Cargo.toml --output-dir ."' package.json > package.json.tmp && mv package.json.tmp package.json
+        elif command -v python3 &> /dev/null; then
+            python3 << 'PYEOF'
+import json
+with open('package.json', 'r') as f:
+    pkg = json.load(f)
+pkg['scripts']['build'] = 'napi build --platform --release --manifest-path ../crates/lucid-perception-napi/Cargo.toml --output-dir .'
+with open('package.json', 'w') as f:
+    json.dump(pkg, f, indent=2)
+PYEOF
+        fi
+
+        # Install napi-rs CLI and build
+        if bun install 2>/dev/null && bun run build 2>/dev/null; then
+            PERCEPTION_READY=true
+            success "Perception module built"
+        else
+            warn "Perception build failed"
+        fi
+        cd "$LUCID_DIR"
+    fi
+fi
+
+# Final perception status
+if [ "$PERCEPTION_READY" = true ]; then
+    success "Perception module ready (video processing enabled)"
+else
+    warn "Perception module not available"
+    echo "  Video processing will use fallback methods (slower)"
+    echo "  To enable, install Rust: https://rustup.rs"
+fi
+
 cd "$LUCID_DIR/server"
 
 # Update package.json to point to the correct native package location (only if native exists)
@@ -808,6 +903,46 @@ with open('package.json', 'r') as f:
     pkg = json.load(f)
 if 'dependencies' in pkg and '@lucid-memory/native' in pkg['dependencies']:
     del pkg['dependencies']['@lucid-memory/native']
+with open('package.json', 'w') as f:
+    json.dump(pkg, f, indent=2)
+PYEOF
+    fi
+fi
+
+# Update package.json for perception module
+if [ -f "package.json" ] && [ -d "$LUCID_DIR/perception" ]; then
+    if command -v jq &> /dev/null; then
+        # Move from optionalDependencies to dependencies and update path
+        jq 'del(.optionalDependencies["@lucid-memory/perception"]) | .dependencies["@lucid-memory/perception"] = "file:../perception"' package.json > package.json.tmp && mv package.json.tmp package.json
+    elif command -v python3 &> /dev/null; then
+        python3 << 'PYEOF'
+import json
+with open('package.json', 'r') as f:
+    pkg = json.load(f)
+# Remove from optionalDependencies
+if 'optionalDependencies' in pkg and '@lucid-memory/perception' in pkg['optionalDependencies']:
+    del pkg['optionalDependencies']['@lucid-memory/perception']
+# Add to dependencies
+if 'dependencies' not in pkg:
+    pkg['dependencies'] = {}
+pkg['dependencies']['@lucid-memory/perception'] = 'file:../perception'
+with open('package.json', 'w') as f:
+    json.dump(pkg, f, indent=2)
+PYEOF
+    fi
+elif [ -f "package.json" ]; then
+    # Perception package doesn't exist, remove the dependency to avoid errors
+    if command -v jq &> /dev/null; then
+        jq 'del(.optionalDependencies["@lucid-memory/perception"]) | del(.dependencies["@lucid-memory/perception"])' package.json > package.json.tmp && mv package.json.tmp package.json
+    elif command -v python3 &> /dev/null; then
+        python3 << 'PYEOF'
+import json
+with open('package.json', 'r') as f:
+    pkg = json.load(f)
+if 'optionalDependencies' in pkg and '@lucid-memory/perception' in pkg['optionalDependencies']:
+    del pkg['optionalDependencies']['@lucid-memory/perception']
+if 'dependencies' in pkg and '@lucid-memory/perception' in pkg['dependencies']:
+    del pkg['dependencies']['@lucid-memory/perception']
 with open('package.json', 'w') as f:
     json.dump(pkg, f, indent=2)
 PYEOF

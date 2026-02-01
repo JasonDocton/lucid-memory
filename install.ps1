@@ -337,7 +337,176 @@ if (Test-Path $ServerSource) {
     Write-Fail "Invalid repository structure" "The downloaded repository is missing required files."
 }
 
+# Copy native package
+$NativeSource = "lucid-memory\packages\lucid-native"
+if (Test-Path $NativeSource) {
+    if (Test-Path "$LucidDir\native") { Remove-Item -Recurse -Force "$LucidDir\native" }
+    Copy-Item -Recurse $NativeSource "$LucidDir\native"
+}
+
+# Copy perception package (video processing)
+$PerceptionSource = "lucid-memory\packages\lucid-perception"
+if (Test-Path $PerceptionSource) {
+    if (Test-Path "$LucidDir\perception") { Remove-Item -Recurse -Force "$LucidDir\perception" }
+    Copy-Item -Recurse $PerceptionSource "$LucidDir\perception"
+}
+
+# Copy Rust crates for potential building
+$CratesSource = "lucid-memory\crates"
+if (Test-Path $CratesSource) {
+    if (Test-Path "$LucidDir\crates") { Remove-Item -Recurse -Force "$LucidDir\crates" }
+    Copy-Item -Recurse $CratesSource "$LucidDir\crates"
+    Copy-Item "lucid-memory\Cargo.toml" "$LucidDir\Cargo.toml"
+    if (Test-Path "lucid-memory\Cargo.lock") {
+        Copy-Item "lucid-memory\Cargo.lock" "$LucidDir\Cargo.lock"
+    }
+}
+
 Set-Location "$LucidDir\server"
+
+# === Set up Native Module ===
+
+function Get-NativeBinaryName {
+    $arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
+    return "lucid-native.win32-$arch-msvc.node"
+}
+
+$NativeBinary = Get-NativeBinaryName
+$NativeReady = $false
+
+# Check if pre-built binary exists in the repo
+$NativeBinaryPath = "$LucidDir\native\$NativeBinary"
+if ((Test-Path "$LucidDir\native") -and (Test-Path $NativeBinaryPath)) {
+    Write-Success "Pre-built native binary found ($NativeBinary)"
+    $NativeReady = $true
+}
+
+# If no pre-built binary, try to download from latest release
+if (-not $NativeReady -and (Test-Path "$LucidDir\native")) {
+    Write-Host "Downloading pre-built native binary..."
+    $NativeReleaseUrl = "https://github.com/JasonDocton/lucid-memory/releases/latest/download/$NativeBinary"
+    try {
+        Invoke-WebRequest -Uri $NativeReleaseUrl -OutFile $NativeBinaryPath -ErrorAction Stop
+        Write-Success "Downloaded native binary"
+        $NativeReady = $true
+    } catch {
+        Write-Host "  No pre-built native binary available for download"
+    }
+}
+
+# If still no binary, try to build with Rust
+if (-not $NativeReady -and (Test-Path "$LucidDir\native")) {
+    if (Get-Command cargo -ErrorAction SilentlyContinue) {
+        Write-Host "Building native Rust module (this gives you 100x faster retrieval)..."
+        Push-Location "$LucidDir\native"
+        try {
+            bun install 2>$null
+            bun run build 2>$null
+            $NativeReady = $true
+            Write-Success "Native Rust module built"
+        } catch {
+            Write-Warn "Native build failed"
+        }
+        Pop-Location
+    }
+}
+
+# Final native status
+if ($NativeReady) {
+    Write-Success "Native module ready (100x faster retrieval)"
+} else {
+    Write-Warn "Using TypeScript fallback (still works, just slower)"
+    Write-Host "  To get 100x faster retrieval, install Rust: https://rustup.rs"
+}
+
+# === Set up Perception Module (Video Processing) ===
+
+function Get-PerceptionBinaryName {
+    $arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
+    return "lucid-perception.win32-$arch-msvc.node"
+}
+
+$PerceptionBinary = Get-PerceptionBinaryName
+$PerceptionReady = $false
+
+# Check if pre-built binary exists in the repo
+$PerceptionBinaryPath = "$LucidDir\perception\$PerceptionBinary"
+if ((Test-Path "$LucidDir\perception") -and (Test-Path $PerceptionBinaryPath)) {
+    Write-Success "Pre-built perception binary found ($PerceptionBinary)"
+    $PerceptionReady = $true
+}
+
+# If no pre-built binary, try to download from latest release
+if (-not $PerceptionReady -and (Test-Path "$LucidDir\perception")) {
+    Write-Host "Downloading pre-built perception binary..."
+    $PerceptionReleaseUrl = "https://github.com/JasonDocton/lucid-memory/releases/latest/download/$PerceptionBinary"
+    try {
+        Invoke-WebRequest -Uri $PerceptionReleaseUrl -OutFile $PerceptionBinaryPath -ErrorAction Stop
+        Write-Success "Downloaded perception binary"
+        $PerceptionReady = $true
+    } catch {
+        Write-Host "  No pre-built perception binary available for download"
+    }
+}
+
+# If still no binary, try to build with Rust
+if (-not $PerceptionReady -and (Test-Path "$LucidDir\perception")) {
+    if (Get-Command cargo -ErrorAction SilentlyContinue) {
+        Write-Host "Building perception module (video processing)..."
+        Push-Location "$LucidDir\perception"
+        try {
+            bun install 2>$null
+            bun run build 2>$null
+            $PerceptionReady = $true
+            Write-Success "Perception module built"
+        } catch {
+            Write-Warn "Perception build failed"
+        }
+        Pop-Location
+    }
+}
+
+# Final perception status
+if ($PerceptionReady) {
+    Write-Success "Perception module ready (video processing enabled)"
+} else {
+    Write-Warn "Perception module not available"
+    Write-Host "  Video processing will use fallback methods (slower)"
+    Write-Host "  To enable, install Rust: https://rustup.rs"
+}
+
+# Update package.json to point to local packages
+$PkgPath = "$LucidDir\server\package.json"
+$Pkg = Get-Content $PkgPath | ConvertFrom-Json
+
+# Handle native package
+if (Test-Path "$LucidDir\native") {
+    if (-not $Pkg.dependencies) { $Pkg | Add-Member -NotePropertyName "dependencies" -NotePropertyValue @{} -Force }
+    $Pkg.dependencies | Add-Member -NotePropertyName "@lucid-memory/native" -NotePropertyValue "file:../native" -Force
+} else {
+    if ($Pkg.dependencies -and $Pkg.dependencies.'@lucid-memory/native') {
+        $Pkg.dependencies.PSObject.Properties.Remove('@lucid-memory/native')
+    }
+}
+
+# Handle perception package
+if (Test-Path "$LucidDir\perception") {
+    if (-not $Pkg.dependencies) { $Pkg | Add-Member -NotePropertyName "dependencies" -NotePropertyValue @{} -Force }
+    $Pkg.dependencies | Add-Member -NotePropertyName "@lucid-memory/perception" -NotePropertyValue "file:../perception" -Force
+    # Remove from optionalDependencies if present
+    if ($Pkg.optionalDependencies -and $Pkg.optionalDependencies.'@lucid-memory/perception') {
+        $Pkg.optionalDependencies.PSObject.Properties.Remove('@lucid-memory/perception')
+    }
+} else {
+    if ($Pkg.optionalDependencies -and $Pkg.optionalDependencies.'@lucid-memory/perception') {
+        $Pkg.optionalDependencies.PSObject.Properties.Remove('@lucid-memory/perception')
+    }
+    if ($Pkg.dependencies -and $Pkg.dependencies.'@lucid-memory/perception') {
+        $Pkg.dependencies.PSObject.Properties.Remove('@lucid-memory/perception')
+    }
+}
+
+$Pkg | ConvertTo-Json -Depth 10 | Out-File -FilePath $PkgPath -Encoding UTF8
 
 Write-Host "Installing dependencies..."
 try {
@@ -556,30 +725,14 @@ Write-Host "Installing memory hooks..."
 $LucidHooksDir = "$LucidDir\hooks"
 New-Item -ItemType Directory -Force -Path $LucidHooksDir | Out-Null
 
-# Create PowerShell version of the hook
-$HookScript = @"
-# Lucid Memory - UserPromptSubmit Hook
-# Stores user messages and retrieves relevant context
-
-`$UserPrompt = `$input | Out-String
-if (`$UserPrompt.Length -lt 5) { exit 0 }
-
-`$LucidCli = "`$env:USERPROFILE\.lucid\bin\lucid.cmd"
-`$ProjectPath = if (`$env:CLAUDE_PROJECT_PATH) { `$env:CLAUDE_PROJECT_PATH } else { Get-Location }
-
-if (Test-Path `$LucidCli) {
-    # Store the user message (background job)
-    Start-Job -ScriptBlock {
-        param(`$cli, `$prompt, `$project)
-        & `$cli store `$prompt --type=conversation --project=`$project 2>`$null
-    } -ArgumentList `$LucidCli, `$UserPrompt, `$ProjectPath | Out-Null
-
-    # Retrieve relevant context (outputs to stdout)
-    & `$LucidCli context `$UserPrompt --project=`$ProjectPath 2>`$null
+# Copy hook script from server package
+$HookSource = "$LucidDir\server\hooks\user-prompt-submit.ps1"
+if (Test-Path $HookSource) {
+    Copy-Item $HookSource "$LucidHooksDir\user-prompt-submit.ps1"
+    Write-Success "Hook script installed"
+} else {
+    Write-Warn "Hook script not found - automatic context injection disabled"
 }
-"@
-$HookScript | Out-File -FilePath "$LucidHooksDir\user-prompt-submit.ps1" -Encoding UTF8
-Write-Success "Hook script installed"
 
 # Configure hook in Claude Code settings.json
 $ClaudeSettings = "$ClaudeSettingsDir\settings.json"
