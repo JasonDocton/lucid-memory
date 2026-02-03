@@ -71,6 +71,7 @@
 //!     access_histories_ms: &[vec![1000.0], vec![500.0], vec![100.0]],
 //!     emotional_weights: &[0.5, 0.5, 0.5],
 //!     decay_rates: &[0.5, 0.5, 0.5],
+//!     working_memory_boosts: &[1.0, 1.0, 1.0],  // 1.0 = no boost, up to 2.0
 //!     associations: &[],  // Optional: links between memories
 //!     current_time_ms: 2000.0,
 //! };
@@ -170,6 +171,7 @@ mod tests {
 			access_histories_ms: &[vec![now - 1000.0], vec![now - 2000.0], vec![now - 3000.0]],
 			emotional_weights: &[0.5, 0.5, 0.5],
 			decay_rates: &[0.5, 0.5, 0.5],
+			working_memory_boosts: &[1.0, 1.0, 1.0],
 			associations: &[],
 			current_time_ms: now,
 		};

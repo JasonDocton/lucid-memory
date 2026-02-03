@@ -51,6 +51,9 @@ fn main() {
 	// No associations in this basic example
 	let associations: Vec<Association> = vec![];
 
+	// No WM boost in this basic example
+	let working_memory_boosts: Vec<f64> = vec![1.0; memories.len()];
+
 	// Build input
 	let input = RetrievalInput {
 		probe_embedding: &probe,
@@ -58,6 +61,7 @@ fn main() {
 		access_histories_ms: &access_histories,
 		emotional_weights: &emotional_weights,
 		decay_rates: &decay_rates,
+		working_memory_boosts: &working_memory_boosts,
 		associations: &associations,
 		current_time_ms,
 	};

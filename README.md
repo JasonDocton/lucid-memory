@@ -13,10 +13,7 @@ curl -fsSL lucidmemory.dev/install | bash
 <br><br>
 </div>
 
-**New in 0.3.0:** <a href="#visual-memory">Visual Memory</a> — Claude now sees and remembers images and videos you share, recalling them when relevant.
-
-**Coming in 0.4.0:** Procedural Memory — Upgrade declarative memory to procedural memory. This enables Claude to learn your work flow, develop instincts, automatically suggest workflows based on context, recognize deviations, and create muscle memory for actions. No more searching or even directing Claude to a common file location - it just knows. 
-
+**New in 0.4.0:** <a href="#location-intuitions">Procedural Memory</a> — Claude learns your workflow, develops instincts, and creates muscle memory for actions. No more searching or directing Claude to common file locations - it just knows.
 
 ---
 
@@ -153,29 +150,41 @@ When you share media in your conversation, Claude automatically processes and re
 
 </details>
 
-<h3 id="location-intuitions">Location Intuitions</h3>
+<h3 id="location-intuitions">Procedural Memory</h3>
 
-**New in 0.2:** Claude now builds spatial memory of your codebase.
+**New in 0.4.0:** Claude develops procedural memory—the "muscle memory" of coding.
 
-After working in a project, Claude develops *intuitions* about file locations—not through explicit memorization, but through repeated exposure, just like you know where your kitchen is without thinking about it.
+After working in a project, Claude doesn't just remember files—it *knows* them. Like how you navigate your home without thinking, Claude builds instinctive knowledge of your codebase through repeated exposure.
 
-| Without Location Intuitions | With Location Intuitions |
-| --------------------------- | ------------------------ |
+| Without Procedural Memory | With Procedural Memory |
+| ------------------------- | ---------------------- |
 | Claude searches for files every time | Claude navigates directly to familiar files |
-| "Let me search for the auth handler..." | "I know auth is in `src/auth/handler.ts`..." |
-| Each session starts from zero | Familiarity persists across sessions |
+| "Let me search for the auth handler..." | "I know auth is in `src/auth/handler.ts`" |
+| Each session starts from zero | Familiarity persists and grows across sessions |
+| No awareness of work patterns | Recognizes related files and workflows |
 
 **How it works:**
 
-- **Familiarity grows asymptotically** — First access: low familiarity. 10th access: high familiarity. 100th access: not much higher (diminishing returns, like real learning)
+- **Familiarity grows asymptotically** — First access: ~9% familiar. 10th access: ~50%. 24th access: 70%+ ("well-known"). Diminishing returns, like real learning.
 - **Context is bound to location** — Claude remembers *what you were doing* when you touched each file (debugging? refactoring? reading?)
-- **Related files link together** — Files worked on for the same task form associative networks
-- **Unused knowledge fades** — Files not accessed in 30+ days gradually decay (but well-known files have "sticky" floors)
+- **Session-aware associations** — Files accessed together in the same session get 1.5x stronger links
+- **Workflow learning** — Files worked on for the same task form associative networks (3x boost)
+- **Temporal retrieval** — Recent memories get priority through 4-phase cognitive processing:
+  1. Working Memory buffer (τ≈4s decay, 7±2 item capacity)
+  2. Session decay modulation (recent = slower forgetting)
+  3. Project context boost (in-project memories ranked higher)
+  4. Session tracking (30-min activity windows)
+- **Graceful decay** — Unused files fade, but well-known ones have "sticky floors"—procedural knowledge resists forgetting
 
 <details>
 <summary><b>The neuroscience</b></summary>
 
-Location Intuitions are modeled on three brain systems:
+Procedural Memory is modeled on five brain systems:
+
+**Working Memory** (Baddeley, 2000; Cowan, 2001)
+- Short-term buffer with ~7 items and ~4 second decay
+- Recently retrieved memories get 2x activation boost
+- Implements the "tip of the tongue" phenomenon
 
 **Hippocampal Place Cells** (O'Keefe & Nadel, 1978)
 - Neurons that fire when you're in a specific location
@@ -194,7 +203,7 @@ Location Intuitions are modeled on three brain systems:
 **Associative Networks** (Hebb, 1949)
 - "Neurons that fire together wire together"
 - Files accessed for the same task form bidirectional associations
-- Shared task context creates strong links; temporal proximity creates weaker links
+- Session-based boost (1.5x) for files accessed in the same work session
 
 </details>
 

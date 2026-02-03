@@ -5,6 +5,66 @@ All notable changes to Lucid Memory will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-02-02
+
+### Added
+
+#### Procedural Memory
+
+Upgrade from declarative to procedural memory. Claude now develops "muscle memory" for your codebase—learning workflows, developing instincts, and navigating without searching.
+
+**Key features:**
+
+- **Working Memory Buffer** — 7±2 item capacity with τ≈4s exponential decay. Recently retrieved memories get 2x activation boost, modeling the "tip of the tongue" phenomenon.
+- **Session-Aware Associations** — Files accessed together in the same session get 1.5x stronger links. Sessions auto-expire after 30 minutes of inactivity.
+- **4-Phase Temporal Retrieval:**
+  1. Working Memory boost (immediate recall)
+  2. Session decay modulation (recent = slower forgetting)
+  3. Project context boost (in-project memories ranked higher)
+  4. Session tracking (30-min activity windows)
+
+**The neuroscience:**
+
+| Brain System | Function | Implementation |
+|--------------|----------|----------------|
+| Working Memory | Short-term buffer | 7 items, 4s decay, 2x boost |
+| Hippocampal Place Cells | Location familiarity | `f(n) = 1 - 1/(1 + 0.1n)` |
+| Entorhinal Cortex | Context binding | Activity type tracking |
+| Associative Networks | Related file linking | Task (3x), activity (2x), session (1.5x) boosts |
+
+#### Production Readiness
+
+Comprehensive audit and hardening for production use:
+
+- **5 critical issues fixed** — Project scoping for visual memory, embedding error handling, safe JSON parsing, null checks
+- **12 high-priority issues addressed** — Type guards, array bounds validation, transaction safety, test coverage
+- **8 low-priority optimizations** — Array allocation, cache pruning, error context in all MCP handlers
+
+**New methods:**
+
+| Method | Purpose |
+|--------|---------|
+| `LucidRetrieval.close()` | Explicit cleanup of WM, caches, and storage |
+| `LucidStorage.pruneExpiredSessions()` | Clean up old session data |
+| `toolError()` | Standardized MCP error handling with tool context |
+
+### Changed
+
+- Association cache TTL increased from 5s to 60s (12x fewer DB queries)
+- Session cache pruning now runs once per TTL instead of every call
+- `Math.max(...history)` replaced with `history[0]` (arrays already sorted DESC)
+- All 22 MCP tool handlers now include tool name in error responses
+
+### Fixed
+
+- Visual memory tools now accept `projectPath` for proper project scoping
+- Embedding failures gracefully fall back to recency-based retrieval
+- `indexOf()` results validated before array access
+- Array alignment assertions prevent silent corruption
+- `recordFileAccess()` wrapped in transaction for consistency
+
+---
+
 ## [0.3.6] - 2025-02-01
 
 ### Fixed

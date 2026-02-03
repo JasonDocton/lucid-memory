@@ -363,9 +363,10 @@ export declare function retrievalProbability(activation: number, threshold: numb
  *
  * This is the core retrieval function that combines:
  * 1. Probe-trace similarity (cosine similarity)
- * 2. Nonlinear activation (MINERVA 2's cubic function)
- * 3. Base-level activation (recency/frequency from ACT-R)
- * 4. Spreading activation through association graph
+ * 2. Working Memory boost (applied to similarity before cubing)
+ * 3. Nonlinear activation (MINERVA 2's cubic function)
+ * 4. Base-level activation (recency/frequency from ACT-R)
+ * 5. Spreading activation through association graph
  *
  * # Arguments
  *
@@ -374,11 +375,12 @@ export declare function retrievalProbability(activation: number, threshold: numb
  * * `access_histories_ms` - Access timestamps (ms) for each memory
  * * `emotional_weights` - Emotional weight (0-1) for each memory
  * * `decay_rates` - Decay rate for each memory (or use config default)
+ * * `working_memory_boosts` - WM boost for each memory (1.0 = no boost, up to 2.0)
  * * `current_time_ms` - Current time in milliseconds
  * * `associations` - Optional association graph edges
  * * `config` - Optional retrieval configuration
  */
-export declare function retrieve(probeEmbedding: Array<number>, memoryEmbeddings: Array<Array<number>>, accessHistoriesMs: Array<Array<number>>, emotionalWeights: Array<number>, decayRates: Array<number>, currentTimeMs: number, associations?: Array<JsAssociation> | undefined | null, config?: JsRetrievalConfig | undefined | null): Array<JsRetrievalCandidate>
+export declare function retrieve(probeEmbedding: Array<number>, memoryEmbeddings: Array<Array<number>>, accessHistoriesMs: Array<Array<number>>, emotionalWeights: Array<number>, decayRates: Array<number>, workingMemoryBoosts: Array<number>, currentTimeMs: number, associations?: Array<JsAssociation> | undefined | null, config?: JsRetrievalConfig | undefined | null): Array<JsRetrievalCandidate>
 
 /** Library version */
 export declare function version(): string

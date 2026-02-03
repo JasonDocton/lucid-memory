@@ -21,6 +21,24 @@ import { z } from "zod"
 import { detectProvider } from "./embeddings.ts"
 import { LucidRetrieval } from "./retrieval.ts"
 
+/**
+ * LOW-8: Helper to create error response with tool context.
+ * Adds tool name to error messages for easier debugging.
+ */
+function toolError(toolName: string, error: unknown) {
+	const message = error instanceof Error ? error.message : String(error)
+	console.error(`[lucid] Tool error in ${toolName}:`, message)
+	return {
+		content: [
+			{
+				type: "text" as const,
+				text: JSON.stringify({ error: message, tool: toolName }),
+			},
+		],
+		isError: true,
+	}
+}
+
 // === Initialize ===
 const retrieval = new LucidRetrieval()
 let hasSemanticSearch = false
@@ -195,15 +213,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("memory_store", error)
 		}
 	}
 )
@@ -299,15 +309,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("memory_query", error)
 		}
 	}
 )
@@ -371,15 +373,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("memory_context", error)
 		}
 	}
 )
@@ -431,15 +425,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("memory_forget", error)
 		}
 	}
 )
@@ -475,15 +461,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("memory_stats", error)
 		}
 	}
 )
@@ -536,6 +514,10 @@ server.tool(
 			.describe("Calm (0) to exciting (1)"),
 		sharedBy: z.string().optional().describe("Who shared this media"),
 		originalPath: z.string().optional().describe("Path to original file"),
+		projectPath: z
+			.string()
+			.optional()
+			.describe("Project path for scoping visual memory"),
 	},
 	async ({
 		description,
@@ -546,8 +528,13 @@ server.tool(
 		emotionalArousal,
 		sharedBy,
 		originalPath,
+		projectPath,
 	}) => {
 		try {
+			const projectId = projectPath
+				? retrieval.storage.getOrCreateProject(projectPath).id
+				: undefined
+
 			const visual = await retrieval.storeVisual({
 				description,
 				mediaType: mediaType as "image" | "video",
@@ -558,6 +545,7 @@ server.tool(
 				emotionalArousal,
 				sharedBy,
 				originalPath,
+				projectId,
 			})
 
 			return {
@@ -577,15 +565,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("visual_store", error)
 		}
 	}
 )
@@ -605,12 +585,24 @@ server.tool(
 			.optional()
 			.default(5)
 			.describe("Max results"),
+		projectPath: z
+			.string()
+			.optional()
+			.describe("Project path for context-aware ranking"),
 	},
-	async ({ query, limit }) => {
+	async ({ query, limit, projectPath }) => {
 		try {
-			const results = await retrieval.retrieveVisual(query, {
-				maxResults: limit,
-			})
+			const projectId = projectPath
+				? retrieval.storage.getOrCreateProject(projectPath).id
+				: undefined
+
+			const results = await retrieval.retrieveVisual(
+				query,
+				{
+					maxResults: limit,
+				},
+				projectId
+			)
 
 			if (results.length === 0) {
 				return {
@@ -653,15 +645,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("visual_search", error)
 		}
 	}
 )
@@ -802,12 +786,15 @@ server.tool(
 				],
 			}
 		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error)
+			console.error("[lucid] Tool error in video_process:", message)
 			return {
 				content: [
 					{
 						type: "text" as const,
 						text: JSON.stringify({
-							error: String(error),
+							error: message,
+							tool: "video_process",
 							hint: "Make sure ffmpeg is installed: brew install ffmpeg",
 						}),
 					},
@@ -840,15 +827,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("video_cleanup", error)
 		}
 	}
 )
@@ -908,6 +887,9 @@ server.tool(
 				? retrieval.storage.getOrCreateProject(projectPath).id
 				: undefined
 
+			// Phase 4: Get session for co-access tracking
+			const sessionId = retrieval.getOrCreateSession(projectId)
+
 			const location = retrieval.storage.recordFileAccess({
 				path,
 				context,
@@ -915,6 +897,7 @@ server.tool(
 				projectId,
 				taskContext,
 				activityType,
+				sessionId,
 			})
 
 			return {
@@ -936,15 +919,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_record", error)
 		}
 	}
 )
@@ -998,15 +973,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_get", error)
 		}
 	}
 )
@@ -1059,15 +1026,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_find", error)
 		}
 	}
 )
@@ -1113,15 +1072,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_all", error)
 		}
 	}
 )
@@ -1167,15 +1118,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_recent", error)
 		}
 	}
 )
@@ -1238,15 +1181,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_contexts", error)
 		}
 	}
 )
@@ -1287,15 +1222,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_stats", error)
 		}
 	}
 )
@@ -1333,15 +1260,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_decay", error)
 		}
 	}
 )
@@ -1388,15 +1307,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_pin", error)
 		}
 	}
 )
@@ -1443,15 +1354,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_orphaned", error)
 		}
 	}
 )
@@ -1510,15 +1413,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_merge", error)
 		}
 	}
 )
@@ -1591,15 +1486,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_associated", error)
 		}
 	}
 )
@@ -1660,15 +1547,7 @@ server.tool(
 				],
 			}
 		} catch (error) {
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: JSON.stringify({ error: String(error) }),
-					},
-				],
-				isError: true,
-			}
+			return toolError("location_by_activity", error)
 		}
 	}
 )

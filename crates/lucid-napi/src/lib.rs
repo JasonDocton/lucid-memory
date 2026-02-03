@@ -86,9 +86,10 @@ pub struct JsRetrievalCandidate {
 ///
 /// This is the core retrieval function that combines:
 /// 1. Probe-trace similarity (cosine similarity)
-/// 2. Nonlinear activation (MINERVA 2's cubic function)
-/// 3. Base-level activation (recency/frequency from ACT-R)
-/// 4. Spreading activation through association graph
+/// 2. Working Memory boost (applied to similarity before cubing)
+/// 3. Nonlinear activation (MINERVA 2's cubic function)
+/// 4. Base-level activation (recency/frequency from ACT-R)
+/// 5. Spreading activation through association graph
 ///
 /// # Arguments
 ///
@@ -97,6 +98,7 @@ pub struct JsRetrievalCandidate {
 /// * `access_histories_ms` - Access timestamps (ms) for each memory
 /// * `emotional_weights` - Emotional weight (0-1) for each memory
 /// * `decay_rates` - Decay rate for each memory (or use config default)
+/// * `working_memory_boosts` - WM boost for each memory (1.0 = no boost, up to 2.0)
 /// * `current_time_ms` - Current time in milliseconds
 /// * `associations` - Optional association graph edges
 /// * `config` - Optional retrieval configuration
@@ -107,6 +109,7 @@ pub fn retrieve(
 	access_histories_ms: Vec<Vec<f64>>,
 	emotional_weights: Vec<f64>,
 	decay_rates: Vec<f64>,
+	working_memory_boosts: Vec<f64>,
 	current_time_ms: f64,
 	associations: Option<Vec<JsAssociation>>,
 	config: Option<JsRetrievalConfig>,
@@ -150,6 +153,7 @@ pub fn retrieve(
 		access_histories_ms: &access_histories_ms,
 		emotional_weights: &emotional_weights,
 		decay_rates: &decay_rates,
+		working_memory_boosts: &working_memory_boosts,
 		associations: &associations,
 		current_time_ms,
 	};
@@ -1011,6 +1015,7 @@ mod tests {
 			vec![vec![now - 1000.0], vec![now - 1000.0]],
 			vec![0.5, 0.5],
 			vec![0.5, 0.5],
+			vec![1.0, 1.0], // No WM boost
 			now,
 			None,
 			Some(JsRetrievalConfig {

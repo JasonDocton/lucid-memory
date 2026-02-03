@@ -21,6 +21,7 @@
 import {
 	EmbeddingClient,
 	type EmbeddingConfig,
+	type EmbeddingResult,
 	cosineSimilarity as tsCosineSimilarity,
 } from "./embeddings.ts"
 import { estimateTokens, generateGist } from "./gist.ts"
@@ -61,7 +62,7 @@ interface JsRetrievalConfig {
 	spreadingDecay?: number
 	minProbability?: number
 	maxResults?: number
-	isBidirectional?: boolean
+	bidirectional?: boolean // LOW-3: Must match Rust field name
 }
 
 export interface RetrievalCandidate {
@@ -80,6 +81,16 @@ export interface VisualRetrievalCandidate {
 	baseLevel: number
 	spreading: number
 	probability: number
+}
+
+/**
+ * Working Memory item - tracks recently activated memories for temporal boost.
+ * Implements cognitive WM with τ≈4s decay (Baddeley, 2000; Cowan, 2001).
+ */
+interface WorkingMemoryItem {
+	readonly memoryId: string
+	readonly activatedAt: number
+	readonly strength: number
 }
 
 export interface RetrievalConfig {
@@ -123,6 +134,26 @@ export class LucidRetrieval {
 	private embedder: EmbeddingClient | null = null
 	private didWarnNoEmbeddings = false
 
+	// Working Memory Buffer (Phase 1: Temporal Retrieval)
+	// Tracks recently activated memories with exponential decay
+	private workingMemory: Map<string, WorkingMemoryItem> = new Map()
+	private readonly wmCapacity = 7 // K≈4-7 items (Cowan, 2001)
+	private readonly wmDecayMs = 4000 // τ≈4 seconds
+	private readonly wmCutoffMultiplier = 5 // Remove after 5τ (20 seconds)
+	private readonly wmMaxBoost = 1.0 // Max boost added (1.0 + 1.0 = 2.0x)
+
+	// Session Tracking (Phase 4: Temporal Retrieval)
+	// Caches current session ID per project to avoid repeated DB lookups
+	private sessionCache: Map<string, { sessionId: string; touchedAt: number }> =
+		new Map()
+	private readonly sessionCacheTtlMs = 60000 // Re-check session every minute
+	private sessionCacheLastPruneAt = 0 // LOW-6: Track last prune to avoid O(n) on every call
+
+	// MED-5: Association cache to avoid repeated full table scans
+	private associationCache: { data: Association[]; cachedAt: number } | null =
+		null
+	private readonly associationCacheTtlMs = 60000 // 60 second TTL (QW-2: reduces DB queries)
+
 	constructor(storageConfig?: StorageConfig) {
 		this.storage = new LucidStorage(storageConfig)
 	}
@@ -142,6 +173,220 @@ export class LucidRetrieval {
 	}
 
 	/**
+	 * Close the retrieval system and release resources.
+	 * LOW-5: Explicit cleanup of ephemeral state on shutdown.
+	 */
+	close(): void {
+		// Clear working memory
+		this.workingMemory.clear()
+
+		// Clear session cache
+		this.sessionCache.clear()
+
+		// Clear association cache
+		this.associationCache = null
+
+		// Close underlying storage
+		this.storage.close()
+	}
+
+	/**
+	 * Get associations with caching to avoid repeated full table scans.
+	 * MED-5: Uses 5-second TTL cache for performance.
+	 */
+	private getCachedAssociations(): Association[] {
+		const now = Date.now()
+		if (
+			this.associationCache &&
+			now - this.associationCache.cachedAt < this.associationCacheTtlMs
+		) {
+			return this.associationCache.data
+		}
+
+		const data = this.storage.getAllAssociations()
+		this.associationCache = { data, cachedAt: now }
+		return data
+	}
+
+	/**
+	 * Invalidate association cache (call when associations change).
+	 */
+	invalidateAssociationCache(): void {
+		this.associationCache = null
+	}
+
+	/**
+	 * Update working memory with a newly activated memory.
+	 * Implements LRU eviction when over capacity.
+	 */
+	private updateWorkingMemory(memoryId: string, now: number): void {
+		// Prune expired entries (older than 5τ)
+		const cutoff = now - this.wmDecayMs * this.wmCutoffMultiplier
+		for (const [id, item] of this.workingMemory) {
+			if (item.activatedAt < cutoff) {
+				this.workingMemory.delete(id)
+			}
+		}
+
+		// Add or refresh this memory
+		this.workingMemory.set(memoryId, {
+			memoryId,
+			activatedAt: now,
+			strength: 1.0,
+		})
+
+		// Enforce capacity (LRU eviction)
+		// LOW-1: Use while loop for defensive programming (handles multiple additions)
+		while (this.workingMemory.size > this.wmCapacity) {
+			let oldestId: string | null = null
+			let oldestTime = Infinity
+			for (const [id, item] of this.workingMemory) {
+				if (item.activatedAt < oldestTime) {
+					oldestTime = item.activatedAt
+					oldestId = id
+				}
+			}
+			if (oldestId) {
+				this.workingMemory.delete(oldestId)
+			} else {
+				break // Safety: prevent infinite loop if no oldest found
+			}
+		}
+	}
+
+	/**
+	 * Get WM boost for a specific memory.
+	 * Returns 1.0 (no boost) to 2.0 (max boost).
+	 * Implements exponential decay: e^(-t/τ)
+	 */
+	private getWorkingMemoryBoost(memoryId: string, now: number): number {
+		const item = this.workingMemory.get(memoryId)
+		if (!item) return 1.0
+
+		const age = now - item.activatedAt
+		// LOW-2: Guard against clock skew (negative age would cause boost > 2.0)
+		if (age < 0) return 1.0
+
+		// Exponential decay: e^(-t/τ) ranges from 1.0 (t=0) to ~0.007 (t=5τ)
+		const decayFactor = Math.exp(-age / this.wmDecayMs)
+
+		// Return boost in range [1.0, 2.0]
+		return 1.0 + this.wmMaxBoost * decayFactor
+	}
+
+	/**
+	 * Compute session-aware decay rate for a memory (Phase 2: Temporal Retrieval).
+	 * Recent memories decay slower (higher base-level activation).
+	 * Stays within ACT-R model by modulating d parameter, not activation directly.
+	 *
+	 * @param lastAccessMs - Timestamp of most recent access
+	 * @param now - Current timestamp
+	 * @returns Decay rate (0.3 to 0.5)
+	 */
+	private getSessionDecayRate(lastAccessMs: number, now: number): number {
+		const hoursAgo = (now - lastAccessMs) / 3600000
+
+		// Guard against future timestamps (clock skew, data corruption)
+		if (hoursAgo < 0) return 0.5
+
+		// Smooth decay rate based on recency
+		if (hoursAgo < 0.5) {
+			// Last 30 minutes: much slower decay → higher activation
+			return 0.3
+		}
+		if (hoursAgo < 2) {
+			// Last 2 hours: slower decay
+			return 0.4
+		}
+		if (hoursAgo < 24) {
+			// Last day: slightly slower
+			return 0.45
+		}
+		// Default ACT-R decay rate
+		return 0.5
+	}
+
+	/**
+	 * Adjust emotional weight for project context (Phase 3: Temporal Retrieval).
+	 * In-project memories get a modest boost via emotional weight.
+	 * This is safe because:
+	 * - Keeps filtering (no cross-project association leakage)
+	 * - Bounded boost via emotional weight (max 1.0)
+	 * - Small effect (0.15 increase = ~1.15x multiplier)
+	 *
+	 * @param baseWeight - Original emotional weight (0-1)
+	 * @param memoryProjectId - Memory's project ID
+	 * @param currentProjectId - Current retrieval project ID
+	 * @returns Adjusted emotional weight (0-1)
+	 */
+	private adjustEmotionalWeightForProject(
+		baseWeight: number,
+		memoryProjectId: string | null,
+		currentProjectId: string | undefined
+	): number {
+		// No boost if no project context
+		if (!currentProjectId || !memoryProjectId) return baseWeight
+
+		// Boost in-project memories
+		if (memoryProjectId === currentProjectId) {
+			return Math.min(baseWeight + 0.15, 1.0)
+		}
+
+		return baseWeight
+	}
+
+	/**
+	 * Get or create a session for the current context (Phase 4: Temporal Retrieval).
+	 * Uses a local cache to avoid repeated DB lookups within the same minute.
+	 *
+	 * Sessions provide temporal context for co-access tracking:
+	 * - Files accessed in the same session get 1.5x association boost
+	 * - Sessions auto-expire after 30 minutes of inactivity
+	 *
+	 * @param projectId - Optional project ID for project-scoped sessions
+	 * @returns Session ID
+	 */
+	getOrCreateSession(projectId?: string): string {
+		const cacheKey = projectId ?? ""
+		const now = Date.now()
+
+		// LOW-6: Only prune every TTL interval to avoid O(n) on every call
+		if (now - this.sessionCacheLastPruneAt >= this.sessionCacheTtlMs) {
+			for (const [key, entry] of this.sessionCache) {
+				if (now - entry.touchedAt >= this.sessionCacheTtlMs) {
+					this.sessionCache.delete(key)
+				}
+			}
+			this.sessionCacheLastPruneAt = now
+		}
+
+		// Check cache first
+		const cached = this.sessionCache.get(cacheKey)
+		if (cached && now - cached.touchedAt < this.sessionCacheTtlMs) {
+			return cached.sessionId
+		}
+
+		// Get or create session from storage
+		const sessionId = this.storage.getOrCreateSession(projectId)
+
+		// Update cache
+		this.sessionCache.set(cacheKey, { sessionId, touchedAt: now })
+
+		return sessionId
+	}
+
+	/**
+	 * Get the current session ID for a project (if any).
+	 * Unlike getOrCreateSession, this does not create a new session.
+	 *
+	 * @param projectId - Optional project ID
+	 * @returns Session ID if active, undefined otherwise
+	 */
+	getCurrentSession(projectId?: string): string | undefined {
+		return this.storage.getCurrentSession(projectId)
+	}
+
+	/**
 	 * Retrieve memories relevant to a query.
 	 * Uses native Rust bindings when available for high-performance cognitive retrieval.
 	 */
@@ -156,7 +401,7 @@ export class LucidRetrieval {
 		// Get all data needed for retrieval
 		const { memories, accessHistories } =
 			this.storage.getAllForRetrieval(projectId)
-		const associations = this.storage.getAllAssociations()
+		const associations = this.getCachedAssociations()
 
 		// Filter by type if specified
 		const filteredMemories = options.filterType
@@ -175,10 +420,13 @@ export class LucidRetrieval {
 			const candidates: RetrievalCandidate[] = filteredMemories.map(
 				(memory, _i) => {
 					const history = accessHistories[memories.indexOf(memory)] ?? []
+					// Phase 2: Use session-aware decay rate
+					const lastAccess = history.length > 0 ? history[0] : 0
+					const decayRate = this.getSessionDecayRate(lastAccess, now)
 					const baseLevel =
 						shouldUseNative && nativeModule
-							? nativeModule.computeBaseLevel(history, now, config.decay)
-							: computeBaseLevelTS(history, now, config.decay)
+							? nativeModule.computeBaseLevel(history, now, decayRate)
+							: computeBaseLevelTS(history, now, decayRate)
 					const probability =
 						shouldUseNative && nativeModule
 							? nativeModule.retrievalProbability(
@@ -207,8 +455,51 @@ export class LucidRetrieval {
 			return candidates.slice(0, limit)
 		}
 
-		// Get probe embedding
-		const probeResult = await this.embedder.embed(query)
+		// Get probe embedding - fall back to recency if embedding fails
+		let probeResult: EmbeddingResult | undefined
+		try {
+			probeResult = await this.embedder.embed(query)
+		} catch (error) {
+			console.error(
+				"[lucid] Embedding failed, falling back to recency-based retrieval:",
+				error
+			)
+			// Fall back to recency-based retrieval (same as no-embedder path)
+			const now = Date.now()
+			const candidates: RetrievalCandidate[] = filteredMemories.map(
+				(memory, _i) => {
+					const history = accessHistories[memories.indexOf(memory)] ?? []
+					const lastAccess = history.length > 0 ? history[0] : 0
+					const decayRate = this.getSessionDecayRate(lastAccess, now)
+					const baseLevel =
+						shouldUseNative && nativeModule
+							? nativeModule.computeBaseLevel(history, now, decayRate)
+							: computeBaseLevelTS(history, now, decayRate)
+					const probability =
+						shouldUseNative && nativeModule
+							? nativeModule.retrievalProbability(
+									baseLevel,
+									config.threshold,
+									config.noise
+								)
+							: retrievalProbabilityTS(
+									baseLevel,
+									config.threshold,
+									config.noise
+								)
+					return {
+						memory,
+						score: baseLevel,
+						similarity: 0,
+						baseLevel,
+						spreading: 0,
+						probability,
+					}
+				}
+			)
+			candidates.sort((a, b) => b.score - a.score)
+			return candidates.slice(0, limit)
+		}
 		const probeVector = probeResult.vector
 
 		const embeddingsMap = this.storage.getAllEmbeddings()
@@ -220,21 +511,64 @@ export class LucidRetrieval {
 		const memoryAccessHistories: number[][] = []
 		const emotionalWeights: number[] = []
 		const decayRates: number[] = []
+		const workingMemoryBoosts: number[] = []
 		const memoryIdToIndex = new Map<string, number>()
 
+		const now = Date.now()
 		for (const memory of filteredMemories) {
 			const embedding = embeddingsMap.get(memory.id)
 			if (!embedding) continue
+
+			// HIGH-6: Validate indexOf result before using as array index
+			const originalIdx = memories.indexOf(memory)
+			if (originalIdx === -1) {
+				console.error(
+					"[lucid] Memory not found in array during retrieval:",
+					memory.id
+				)
+				continue
+			}
 
 			const idx = memoriesWithEmbeddings.length
 			memoryIdToIndex.set(memory.id, idx)
 			memoriesWithEmbeddings.push(memory)
 			memoryEmbeddings.push(embedding)
 
-			const originalIdx = memories.indexOf(memory)
-			memoryAccessHistories.push(accessHistories[originalIdx] || [Date.now()])
-			emotionalWeights.push(memory.emotionalWeight ?? 0.5)
-			decayRates.push(config.decay)
+			const history = accessHistories[originalIdx] || [now]
+			memoryAccessHistories.push(history)
+
+			// Phase 3: Project Context Boost
+			// In-project memories get +0.15 emotional weight (~1.15x multiplier)
+			emotionalWeights.push(
+				this.adjustEmotionalWeightForProject(
+					memory.emotionalWeight ?? 0.5,
+					memory.projectId,
+					projectId
+				)
+			)
+
+			// Phase 2: Session Decay Modulation
+			// Use session-aware decay rate instead of fixed config.decay
+			const lastAccess = history.length > 0 ? history[0] : 0
+			decayRates.push(this.getSessionDecayRate(lastAccess, now))
+
+			// Phase 1: Working Memory Boost (now computed here, applied in Rust)
+			workingMemoryBoosts.push(this.getWorkingMemoryBoost(memory.id, now))
+		}
+
+		// HIGH-7: Validate array alignment - all parallel arrays must have same length
+		const arrLen = memoriesWithEmbeddings.length
+		if (
+			memoryEmbeddings.length !== arrLen ||
+			memoryAccessHistories.length !== arrLen ||
+			emotionalWeights.length !== arrLen ||
+			decayRates.length !== arrLen ||
+			workingMemoryBoosts.length !== arrLen
+		) {
+			console.error(
+				"[lucid] Array alignment mismatch in retrieval - this is a bug"
+			)
+			return []
 		}
 
 		if (memoriesWithEmbeddings.length === 0) {
@@ -250,6 +584,7 @@ export class LucidRetrieval {
 				memoryAccessHistories,
 				emotionalWeights,
 				decayRates,
+				workingMemoryBoosts,
 				associations,
 				memoryIdToIndex,
 				config,
@@ -272,6 +607,7 @@ export class LucidRetrieval {
 
 	/**
 	 * Native Rust retrieval implementation.
+	 * WM boost is now applied in Rust before MINERVA 2 cubing (biologically correct).
 	 */
 	private retrieveNative(
 		probeVector: number[],
@@ -280,6 +616,7 @@ export class LucidRetrieval {
 		memoryAccessHistories: number[][],
 		emotionalWeights: number[],
 		decayRates: number[],
+		workingMemoryBoosts: number[],
 		associations: Association[],
 		memoryIdToIndex: Map<string, number>,
 		config: RetrievalConfig,
@@ -311,10 +648,10 @@ export class LucidRetrieval {
 			spreadingDecay: 0.7,
 			minProbability: config.minProbability,
 			maxResults: limit,
-			isBidirectional: true,
+			bidirectional: true, // LOW-3: Fixed to match Rust field name
 		}
 
-		// Call native Rust retrieval
+		// Call native Rust retrieval (WM boost is applied in Rust before MINERVA 2)
 		const now = Date.now()
 		const nativeResults = nativeModule.retrieve(
 			probeVector,
@@ -322,12 +659,14 @@ export class LucidRetrieval {
 			memoryAccessHistories,
 			emotionalWeights,
 			decayRates,
+			workingMemoryBoosts,
 			now,
 			nativeAssociations.length > 0 ? nativeAssociations : null,
 			nativeConfig
 		)
 
 		// Map native results back to Memory objects
+		// WM boost is already applied in Rust (before MINERVA 2 cubing)
 		const candidates: RetrievalCandidate[] = nativeResults
 			.map((result) => {
 				const memory = memoriesWithEmbeddings[result.index]
@@ -347,9 +686,14 @@ export class LucidRetrieval {
 			})
 			.filter((c): c is NonNullable<typeof c> => c !== null)
 
-		// Record access for returned memories
+		// Record access and update Working Memory for returned memories
 		for (const candidate of candidates) {
-			this.storage.recordAccess(candidate.memory.id)
+			try {
+				this.storage.recordAccess(candidate.memory.id)
+			} catch (error) {
+				console.error("[lucid] Failed to record access:", error)
+			}
+			this.updateWorkingMemory(candidate.memory.id, now)
 		}
 
 		return candidates
@@ -371,6 +715,9 @@ export class LucidRetrieval {
 		const now = Date.now()
 		const candidates: RetrievalCandidate[] = []
 
+		// MED-4: Build association index map once (O(n) instead of O(n²))
+		const associationIndex = buildAssociationIndex(associations)
+
 		for (let i = 0; i < memoriesWithEmbeddings.length; i++) {
 			const memory = memoriesWithEmbeddings[i]
 			const embedding = memoryEmbeddings[i]
@@ -379,17 +726,24 @@ export class LucidRetrieval {
 			// Compute similarity
 			const similarity = tsCosineSimilarity(probeVector, embedding)
 
-			// Apply nonlinear activation (MINERVA 2)
-			const probeActivation = similarity ** 3
+			// Apply Working Memory boost to similarity (Phase 1: Temporal Retrieval)
+			// WM boost only affects probe similarity, not base-level or spreading
+			const wmBoost = this.getWorkingMemoryBoost(memory.id, now)
+			const boostedSimilarity = Math.min(similarity * wmBoost, 1.0)
 
-			// Compute base-level activation
+			// Apply nonlinear activation (MINERVA 2) to boosted similarity
+			const probeActivation = boostedSimilarity ** 3
+
+			// Compute base-level activation with session-aware decay (Phase 2)
 			const history = memoryAccessHistories[i] ?? []
-			const baseLevel = computeBaseLevelTS(history, now, config.decay)
+			const lastAccess = history.length > 0 ? history[0] : 0
+			const decayRate = this.getSessionDecayRate(lastAccess, now)
+			const baseLevel = computeBaseLevelTS(history, now, decayRate)
 
-			// Compute spreading activation
+			// Compute spreading activation (using pre-built index)
 			const spreading = computeSpreadingActivationTS(
 				memory.id,
-				associations,
+				associationIndex,
 				embeddingsMap,
 				probeVector
 			)
@@ -423,9 +777,14 @@ export class LucidRetrieval {
 		candidates.sort((a, b) => b.score - a.score)
 		const results = candidates.slice(0, limit)
 
-		// Record access for returned memories
+		// Record access and update Working Memory for returned memories
 		for (const candidate of results) {
-			this.storage.recordAccess(candidate.memory.id)
+			try {
+				this.storage.recordAccess(candidate.memory.id)
+			} catch (error) {
+				console.error("[lucid] Failed to record access:", error)
+			}
+			this.updateWorkingMemory(candidate.memory.id, now)
 		}
 
 		return results
@@ -554,7 +913,13 @@ export class LucidRetrieval {
 		if (pending.length === 0) return 0
 
 		const texts = pending.map((m) => m.content)
-		const embeddings = await this.embedder.embedBatch(texts)
+		let embeddings: EmbeddingResult[]
+		try {
+			embeddings = await this.embedder.embedBatch(texts)
+		} catch (error) {
+			console.error("[lucid] Batch embedding failed:", error)
+			return 0
+		}
 
 		for (let i = 0; i < pending.length; i++) {
 			const memory = pending[i]
@@ -573,10 +938,15 @@ export class LucidRetrieval {
 	/**
 	 * Retrieve visual memories relevant to a query.
 	 * Uses native Rust bindings when available for high-performance retrieval.
+	 *
+	 * @param query - Search query
+	 * @param options - Retrieval configuration
+	 * @param projectId - Optional project ID for Phase 3 project context boost
 	 */
 	async retrieveVisual(
 		query: string,
-		options: Partial<RetrievalConfig> = {}
+		options: Partial<RetrievalConfig> = {},
+		projectId?: string
 	): Promise<VisualRetrievalCandidate[]> {
 		const config = { ...DEFAULT_CONFIG, ...options }
 		const limit = config.maxResults ?? config.limit ?? 10
@@ -601,10 +971,13 @@ export class LucidRetrieval {
 			const candidates: VisualRetrievalCandidate[] = visuals.map(
 				(visual, i) => {
 					const history = accessHistories[i] ?? []
+					// Phase 2: Session-aware decay rate
+					const lastAccess = history.length > 0 ? history[0] : 0
+					const decayRate = this.getSessionDecayRate(lastAccess, now)
 					const baseLevel =
 						shouldUseNative && nativeModule
-							? nativeModule.computeBaseLevel(history, now, config.decay)
-							: computeBaseLevelTS(history, now, config.decay)
+							? nativeModule.computeBaseLevel(history, now, decayRate)
+							: computeBaseLevelTS(history, now, decayRate)
 					const probability =
 						shouldUseNative && nativeModule
 							? nativeModule.retrievalProbability(
@@ -655,7 +1028,14 @@ export class LucidRetrieval {
 			visualsWithEmbeddings.push(visual)
 			visualEmbeddings.push(embedding)
 			visualAccessHistories.push(accessHistories[i] ?? [Date.now()])
-			visualEmotionalWeights.push(emotionalWeights[i] ?? 1)
+			// Phase 3: Apply project context boost to emotional weight
+			const baseWeight = emotionalWeights[i] ?? 1
+			const boostedWeight = this.adjustEmotionalWeightForProject(
+				baseWeight,
+				visual.projectId,
+				projectId
+			)
+			visualEmotionalWeights.push(boostedWeight)
 			visualSignificanceScores.push(significanceScores[i] ?? 0.5)
 		}
 
@@ -727,7 +1107,10 @@ export class LucidRetrieval {
 			const similarity = tsCosineSimilarity(probeVector, embedding)
 			const probeActivation = similarity ** 3
 			const history = visualAccessHistories[i] ?? []
-			const baseLevel = computeBaseLevelTS(history, now, config.decay)
+			// Phase 2: Session-aware decay rate
+			const lastAccess = history.length > 0 ? history[0] : 0
+			const decayRate = this.getSessionDecayRate(lastAccess, now)
+			const baseLevel = computeBaseLevelTS(history, now, decayRate)
 
 			// Add significance and emotional boosts
 			const emotionalWeight = visualEmotionalWeights[i] ?? 1
@@ -805,7 +1188,13 @@ export class LucidRetrieval {
 		if (pending.length === 0) return 0
 
 		const texts = pending.map((v) => v.description)
-		const embeddings = await this.embedder.embedBatch(texts)
+		let embeddings: EmbeddingResult[]
+		try {
+			embeddings = await this.embedder.embedBatch(texts)
+		} catch (error) {
+			console.error("[lucid] Batch visual embedding failed:", error)
+			return 0
+		}
 
 		for (let i = 0; i < pending.length; i++) {
 			const visual = pending[i]
@@ -947,22 +1336,46 @@ function computeBaseLevelTS(
 }
 
 /**
+ * Build an index map from associations for O(1) lookup.
+ * MED-4: This eliminates the O(n²) filter operation in spreading activation.
+ */
+function buildAssociationIndex(
+	associations: Association[]
+): Map<string, Association[]> {
+	const index = new Map<string, Association[]>()
+
+	for (const assoc of associations) {
+		// Index by source
+		const sourceList = index.get(assoc.sourceId) ?? []
+		sourceList.push(assoc)
+		index.set(assoc.sourceId, sourceList)
+
+		// Index by target (for bidirectional lookup)
+		const targetList = index.get(assoc.targetId) ?? []
+		targetList.push(assoc)
+		index.set(assoc.targetId, targetList)
+	}
+
+	return index
+}
+
+/**
  * Compute spreading activation from associated memories.
  *
  * For each associated memory, activation spreads based on:
  * - Association strength
  * - How similar the associated memory is to the probe
+ *
+ * MED-4: Uses pre-built index for O(1) lookup instead of O(n) filter.
  */
 function computeSpreadingActivationTS(
 	memoryId: string,
-	allAssociations: Association[],
+	associationIndex: Map<string, Association[]>,
 	embeddings: Map<string, number[]>,
 	probeVector: number[]
 ): number {
-	// Find associations involving this memory
-	const relevant = allAssociations.filter(
-		(a) => a.sourceId === memoryId || a.targetId === memoryId
-	)
+	// O(1) lookup instead of O(n) filter
+	const relevant = associationIndex.get(memoryId) ?? []
 
 	if (relevant.length === 0) return 0
 

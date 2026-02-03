@@ -83,12 +83,68 @@ Files accessed together become linked:
 |---------|---------------|
 | Same task + same activity | 5x |
 | Same task + different activity | 3x |
+| Same session | 1.5x (stacks with above) |
 | Time-based + same activity | 2x |
 | Just temporal proximity | 1x |
+
+### Session Tracking
+
+Sessions group related work:
+- Auto-created on first file access per project
+- Auto-expire after 30 minutes of inactivity
+- Files accessed in the same session form stronger associations (1.5x boost)
 
 ### Decay with Protection
 
 Unused locations fade over time, but well-known ones have a "sticky floor"—procedural knowledge resists forgetting. Pinned locations never decay.
+
+## Temporal Retrieval (4 Phases)
+
+When retrieving memories, 4 cognitive phases modulate activation:
+
+### Phase 1: Working Memory Buffer
+
+Short-term memory for recently accessed items:
+
+```
+Boost = 1 + e^(-(t - t_activated) / τ)
+```
+
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| Capacity | 7±2 items | Miller (1956), Cowan (2001) |
+| Decay (τ) | 4 seconds | Baddeley (2000) |
+| Max boost | 2x | At t=0 |
+| Cutoff | 5τ (20s) | Items removed after this |
+
+### Phase 2: Session Decay Modulation
+
+Recent memories decay slower:
+
+| Time Since Access | Decay Rate |
+|-------------------|------------|
+| < 30 minutes | d = 0.3 |
+| < 2 hours | d = 0.4 |
+| < 24 hours | d = 0.45 |
+| > 24 hours | d = 0.5 |
+
+Lower decay = slower forgetting = higher activation.
+
+### Phase 3: Project Context Boost
+
+Memories from the current project get priority:
+
+- In-project memories: +0.15 emotional weight boost
+- Cross-project memories: no boost
+- Caps at 1.0 emotional weight
+
+### Phase 4: Session Tracking
+
+Session context enhances associations:
+
+- Same session = 1.5x association strength
+- Enables "what files did I work with recently?" queries
+- Supports workflow pattern recognition
 
 ## Consolidation (Visual Memory)
 
@@ -146,10 +202,12 @@ Lucid Memory implements two established cognitive models:
 
 | Module | Brain System | What It Models |
 |--------|--------------|----------------|
+| Working memory buffer | Prefrontal cortex | Short-term active maintenance |
 | Base-level activation | Neocortex/MTL | Memory strength over time |
 | Spreading activation | Associative networks | "Neurons that fire together wire together" |
 | Location intuitions | Hippocampus | Place cells and spatial memory |
 | Emotional weighting | Amygdala | Emotional memories are stronger |
+| Session tracking | Episodic memory | Temporal context binding |
 | Consolidation | Sleep/rest cycles | Memory stabilization over time |
 
 ## Learn More

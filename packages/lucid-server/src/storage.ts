@@ -56,6 +56,20 @@ try {
 	// Native module not available - TypeScript fallback will be used
 }
 
+// ============================================================================
+// Safe JSON Parsing
+// ============================================================================
+
+function safeJsonParse<T>(json: string | null | undefined, fallback: T): T {
+	if (!json) return fallback
+	try {
+		return JSON.parse(json) as T
+	} catch {
+		console.error("[lucid] Failed to parse JSON:", json.slice(0, 100))
+		return fallback
+	}
+}
+
 // Types
 export type MemoryType =
 	| "learning"
@@ -129,6 +143,7 @@ export interface VisualMemory {
 	lastAccessed: number | null
 	accessCount: number
 	createdAt: number
+	projectId: string | null // Project context for Phase 3 boost
 }
 
 export interface VisualMemoryInput {
@@ -141,6 +156,7 @@ export interface VisualMemoryInput {
 	emotionalArousal?: number
 	significance?: number
 	sharedBy?: string
+	projectId?: string // Project context for Phase 3 boost
 }
 
 // ============================================================================
@@ -155,6 +171,38 @@ export type ActivityType =
 	| "reviewing"
 	| "unknown"
 export type InferenceSource = "explicit" | "keyword" | "tool" | "default"
+
+const ACTIVITY_TYPES: readonly ActivityType[] = [
+	"reading",
+	"writing",
+	"debugging",
+	"refactoring",
+	"reviewing",
+	"unknown",
+]
+const INFERENCE_SOURCES: readonly InferenceSource[] = [
+	"explicit",
+	"keyword",
+	"tool",
+	"default",
+]
+const ASSOCIATION_TYPES: readonly Association["type"][] = [
+	"semantic",
+	"temporal",
+	"causal",
+]
+
+function isActivityType(s: string): s is ActivityType {
+	return ACTIVITY_TYPES.includes(s as ActivityType)
+}
+
+function isInferenceSource(s: string): s is InferenceSource {
+	return INFERENCE_SOURCES.includes(s as InferenceSource)
+}
+
+function isAssociationType(s: string): s is Association["type"] {
+	return ASSOCIATION_TYPES.includes(s as Association["type"])
+}
 
 export interface LocationIntuition {
 	id: string
@@ -179,6 +227,7 @@ export interface FileAccessRecord {
 	projectId?: string
 	taskContext?: string
 	activityType?: ActivityType
+	sessionId?: string
 }
 
 export interface LocationAccessContext {
@@ -393,7 +442,8 @@ export class LucidStorage {
         received_at INTEGER NOT NULL,        -- When received
         last_accessed INTEGER,               -- For base-level activation
         access_count INTEGER DEFAULT 0,      -- Frequency tracking
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        project_id TEXT                      -- Project context for Phase 3 boost
       );
 
       -- Visual Memory Embeddings (from description text)
@@ -415,7 +465,22 @@ export class LucidStorage {
       CREATE INDEX IF NOT EXISTS idx_visual_memories_shared_by ON visual_memories(shared_by);
       CREATE INDEX IF NOT EXISTS idx_visual_memories_received_at ON visual_memories(received_at);
       CREATE INDEX IF NOT EXISTS idx_visual_memories_significance ON visual_memories(significance);
+      CREATE INDEX IF NOT EXISTS idx_visual_memories_project ON visual_memories(project_id);
       CREATE INDEX IF NOT EXISTS idx_visual_access_memory ON visual_access_history(visual_memory_id);
+
+      -- Sessions for temporal context tracking (Phase 4)
+      -- Sessions auto-expire after 30 minutes of inactivity
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        project_id TEXT,
+        last_active_at INTEGER NOT NULL,
+        metadata TEXT DEFAULT '{}'
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
+      CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(last_active_at);
     `)
 	}
 
@@ -645,13 +710,14 @@ export class LucidStorage {
 
 		if (!row) return null
 
-		return Array.from(
-			new Float32Array(
+		// LOW-4: Use spread operator instead of Array.from() for better performance
+		return [
+			...new Float32Array(
 				row.vector.buffer,
 				row.vector.byteOffset,
 				row.vector.byteLength / 4
-			)
-		)
+			),
+		]
 	}
 
 	/**
@@ -666,13 +732,14 @@ export class LucidStorage {
 
 		const map = new Map<string, number[]>()
 		for (const row of rows) {
-			const vector = Array.from(
-				new Float32Array(
+			// LOW-4: Use spread operator instead of Array.from() for better performance
+			const vector = [
+				...new Float32Array(
 					row.vector.buffer,
 					row.vector.byteOffset,
 					row.vector.byteLength / 4
-				)
-			)
+				),
+			]
 			map.set(row.memory_id, vector)
 		}
 		return map
@@ -742,7 +809,7 @@ export class LucidStorage {
 			sourceId: r.source_id,
 			targetId: r.target_id,
 			strength: r.strength,
-			type: r.type as Association["type"],
+			type: isAssociationType(r.type) ? r.type : "semantic",
 		}))
 	}
 
@@ -758,7 +825,7 @@ export class LucidStorage {
 			sourceId: r.source_id,
 			targetId: r.target_id,
 			strength: r.strength,
-			type: r.type as Association["type"],
+			type: isAssociationType(r.type) ? r.type : "semantic",
 		}))
 	}
 
@@ -766,12 +833,17 @@ export class LucidStorage {
 	 * Remove an association.
 	 */
 	dissociate(sourceId: string, targetId: string): boolean {
-		const result = this.db
-			.prepare(`
-      DELETE FROM associations WHERE source_id = ? AND target_id = ?
-    `)
-			.run(sourceId, targetId)
-		return result.changes > 0
+		try {
+			const result = this.db
+				.prepare(`
+        DELETE FROM associations WHERE source_id = ? AND target_id = ?
+      `)
+				.run(sourceId, targetId)
+			return result.changes > 0
+		} catch (error) {
+			console.error("[lucid] Failed to dissociate:", error)
+			return false
+		}
 	}
 
 	// ============================================================================
@@ -853,6 +925,7 @@ export class LucidStorage {
 		projectId: string
 		taskContext: string | null
 		activityType: ActivityType
+		sessionId: string | null
 	}[] = []
 	private readonly CO_ACCESS_WINDOW_MS = 60 * 60 * 1000 // 1 hour (fallback)
 
@@ -861,11 +934,15 @@ export class LucidStorage {
 	 * This enables strong associations between files worked on for the same purpose,
 	 * regardless of timing. Key insight: "implementing login" might span multiple
 	 * sessions across days, but all those files are conceptually linked.
+	 *
+	 * MED-1: Uses LRU eviction to prevent unbounded growth (max 100 task keys).
 	 */
 	private taskContextLocations: Map<
 		string,
-		{ locationId: string; activityType: ActivityType }[]
+		{ locationId: string; activityType: ActivityType; lastAccessedAt: number }[]
 	> = new Map()
+	private readonly MAX_TASK_CONTEXT_KEYS = 100
+	private readonly MAX_RECENT_ACCESSES = 500
 
 	/**
 	 * Normalize project ID - empty string means global.
@@ -896,8 +973,10 @@ export class LucidStorage {
 				explicit ?? null
 			)
 			return {
-				activityType: result.activityType as ActivityType,
-				source: result.source as InferenceSource,
+				activityType: isActivityType(result.activityType)
+					? result.activityType
+					: "unknown",
+				source: isInferenceSource(result.source) ? result.source : "default",
 				confidence: result.confidence,
 			}
 		}
@@ -984,6 +1063,7 @@ export class LucidStorage {
 	recordFileAccess(record: FileAccessRecord): LocationIntuition {
 		const now = new Date().toISOString()
 		const id = randomUUID()
+		const contextId = randomUUID()
 		const projectId = this.normalizeProjectId(record.projectId)
 		const inference = this.inferActivityType(
 			record.context,
@@ -996,66 +1076,84 @@ export class LucidStorage {
 			? nativeLocation.locationComputeFamiliarity(1)
 			: 0.091 // f(1) = 1 - 1/1.1 ≈ 0.091
 
-		// Atomic upsert - no race condition
-		// Note: SQL computes familiarity on update for efficiency (avoids round-trip)
-		this.db
-			.prepare(`
-      INSERT INTO location_intuitions
-      (id, project_id, path, description, familiarity, access_count, searches_saved, last_accessed, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
-      ON CONFLICT(project_id, path) DO UPDATE SET
-        access_count = access_count + 1,
-        searches_saved = searches_saved + excluded.searches_saved,
-        familiarity = 1.0 - 1.0 / (1.0 + 0.1 * (access_count + 1)),
-        last_accessed = excluded.last_accessed,
-        updated_at = excluded.updated_at,
-        description = COALESCE(description, excluded.description)
-    `)
-			.run(
-				id,
-				projectId,
-				record.path,
-				record.context,
-				initialFamiliarity,
-				record.wasDirectAccess ? 1 : 0,
-				now,
-				now,
-				now
-			)
+		// HIGH-9: Wrap core DB operations in transaction for consistency
+		let location: LocationIntuition
+		try {
+			this.db.exec("BEGIN IMMEDIATE")
 
-		// Get the location (whether inserted or updated)
-		// biome-ignore lint/style/noNonNullAssertion: just upserted this location
-		const location = this.getLocationByPath(record.path, record.projectId)!
+			// Atomic upsert - no race condition
+			// Note: SQL computes familiarity on update for efficiency (avoids round-trip)
+			this.db
+				.prepare(`
+        INSERT INTO location_intuitions
+        (id, project_id, path, description, familiarity, access_count, searches_saved, last_accessed, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+        ON CONFLICT(project_id, path) DO UPDATE SET
+          access_count = access_count + 1,
+          searches_saved = searches_saved + excluded.searches_saved,
+          familiarity = 1.0 - 1.0 / (1.0 + 0.1 * (access_count + 1)),
+          last_accessed = excluded.last_accessed,
+          updated_at = excluded.updated_at,
+          description = COALESCE(description, excluded.description)
+      `)
+				.run(
+					id,
+					projectId,
+					record.path,
+					record.context,
+					initialFamiliarity,
+					record.wasDirectAccess ? 1 : 0,
+					now,
+					now,
+					now
+				)
 
-		// Record access context (entorhinal binding)
-		const contextId = randomUUID()
-		this.db
-			.prepare(`
-      INSERT INTO location_access_contexts
-      (id, location_id, context_description, was_direct_access, task_context, activity_type, activity_source, accessed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-			.run(
-				contextId,
-				location.id,
-				record.context,
-				record.wasDirectAccess ? 1 : 0,
-				record.taskContext ?? null,
-				inference.activityType,
-				inference.source,
-				now
-			)
+			// Get the location (whether inserted or updated)
+			// biome-ignore lint/style/noNonNullAssertion: just upserted this location
+			location = this.getLocationByPath(record.path, record.projectId)!
 
+			// Record access context (entorhinal binding)
+			this.db
+				.prepare(`
+        INSERT INTO location_access_contexts
+        (id, location_id, context_description, was_direct_access, task_context, activity_type, activity_source, accessed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+				.run(
+					contextId,
+					location.id,
+					record.context,
+					record.wasDirectAccess ? 1 : 0,
+					record.taskContext ?? null,
+					inference.activityType,
+					inference.source,
+					now
+				)
+
+			this.db.exec("COMMIT")
+		} catch (error) {
+			this.db.exec("ROLLBACK")
+			throw error
+		}
+
+		// Post-transaction operations (can fail independently)
 		// Batched pruning
 		this.maybeRunPruning(location.id, location.contextLimit)
 
 		// Co-access tracking (hippocampal place field overlap)
+		// Phase 4: Pass session ID for session-based association boosting
 		this.trackCoAccess(
 			location.id,
 			projectId,
 			record.taskContext ?? null,
-			inference.activityType
+			inference.activityType,
+			record.sessionId ?? null
 		)
+
+		// Phase 4: Keep session active during file access
+		if (record.sessionId) {
+			this.touchSession(record.sessionId)
+		}
 
 		return location
 	}
@@ -1084,7 +1182,8 @@ export class LucidStorage {
 		locationId: string,
 		projectId: string,
 		taskContext: string | null,
-		activityType: ActivityType
+		activityType: ActivityType,
+		sessionId: string | null = null
 	): void {
 		const now = Date.now()
 
@@ -1097,23 +1196,42 @@ export class LucidStorage {
 			for (const other of taskLocations) {
 				if (other.locationId !== locationId) {
 					// Same task = true, activity match determines strength
+					// Session info not tracked in task cache (spans sessions)
 					const isSameActivity = other.activityType === activityType
 					this.strengthenLocationAssociation(
 						other.locationId,
 						locationId,
 						true,
-						isSameActivity
+						isSameActivity,
+						false // Task-based associations span sessions
 					)
 				}
 			}
 
-			// Add current location to task cache
-			taskLocations.push({ locationId, activityType })
+			// Add current location to task cache with timestamp
+			taskLocations.push({ locationId, activityType, lastAccessedAt: now })
 			this.taskContextLocations.set(taskKey, taskLocations)
 
-			// Limit task cache size to prevent unbounded growth
+			// Limit per-task array size
 			if (taskLocations.length > 100) {
 				taskLocations.shift()
+			}
+
+			// MED-1: LRU eviction for task keys when over capacity
+			if (this.taskContextLocations.size > this.MAX_TASK_CONTEXT_KEYS) {
+				let oldestKey: string | null = null
+				let oldestTime = Infinity
+				for (const [key, locs] of this.taskContextLocations) {
+					const lastAccess =
+						locs.length > 0 ? locs[locs.length - 1].lastAccessedAt : 0
+					if (lastAccess < oldestTime) {
+						oldestTime = lastAccess
+						oldestKey = key
+					}
+				}
+				if (oldestKey) {
+					this.taskContextLocations.delete(oldestKey)
+				}
 			}
 		}
 
@@ -1136,12 +1254,18 @@ export class LucidStorage {
 			}
 
 			// Time-based: not same task, activity match determines strength
+			// Phase 4: Session match provides 1.5x multiplier
 			const isSameActivity = recent.activityType === activityType
+			const isSameSession =
+				sessionId !== null &&
+				recent.sessionId !== null &&
+				sessionId === recent.sessionId
 			this.strengthenLocationAssociation(
 				recent.locationId,
 				locationId,
 				false,
-				isSameActivity
+				isSameActivity,
+				isSameSession
 			)
 		}
 
@@ -1152,7 +1276,13 @@ export class LucidStorage {
 			projectId,
 			taskContext,
 			activityType,
+			sessionId,
 		})
+
+		// MED-2: Hard limit on recentAccesses size as safeguard
+		if (this.recentAccesses.length > this.MAX_RECENT_ACCESSES) {
+			this.recentAccesses = this.recentAccesses.slice(-this.MAX_RECENT_ACCESSES)
+		}
 	}
 
 	/**
@@ -1167,6 +1297,9 @@ export class LucidStorage {
 	 * - 2x: Time-based + same activity (probable link)
 	 * - 1x: Time-based only (possible link, fallback)
 	 *
+	 * Session multiplier (Phase 4):
+	 * - 1.5x: Same session (applied on top of base multiplier)
+	 *
 	 * Higher multiplier = faster approach to max strength.
 	 * This means task-based associations reach "strong" status in fewer accesses.
 	 */
@@ -1174,7 +1307,8 @@ export class LucidStorage {
 		sourceId: string,
 		targetId: string,
 		isSameTask: boolean,
-		isSameActivity: boolean
+		isSameActivity: boolean,
+		isSameSession = false
 	): void {
 		const now = new Date().toISOString()
 
@@ -1187,8 +1321,8 @@ export class LucidStorage {
 				)
 			: this.computeAssociationStrengthTS(1, isSameTask, isSameActivity)
 
-		// Determine multiplier for SQL update (TypeScript fallback logic)
-		const multiplier = isSameTask
+		// Determine base multiplier for SQL update (TypeScript fallback logic)
+		const baseMultiplier = isSameTask
 			? isSameActivity
 				? 5
 				: 3
@@ -1196,32 +1330,46 @@ export class LucidStorage {
 				? 2
 				: 1
 
-		// Upsert in both directions for bidirectional association
-		const pairs: [string, string][] = [
-			[sourceId, targetId],
-			[targetId, sourceId],
-		]
-		for (const [src, tgt] of pairs) {
-			this.db
-				.prepare(`
-        INSERT INTO location_associations
-        (id, source_id, target_id, strength, co_access_count, last_co_access, created_at)
-        VALUES (?, ?, ?, ?, 1, ?, ?)
-        ON CONFLICT(source_id, target_id) DO UPDATE SET
-          co_access_count = co_access_count + ?,
-          strength = 1.0 - 1.0 / (1.0 + 0.1 * (co_access_count + ?)),
-          last_co_access = excluded.last_co_access
-      `)
-				.run(
-					randomUUID(),
-					src,
-					tgt,
-					initialStrength,
-					now,
-					now,
-					multiplier,
-					multiplier
-				)
+		// Phase 4: Session multiplier (1.5x for same session)
+		const sessionMultiplier = isSameSession ? 1.5 : 1.0
+		const multiplier = baseMultiplier * sessionMultiplier
+
+		// HIGH-10: Wrap bidirectional upsert in transaction with error handling
+		try {
+			this.db.exec("BEGIN IMMEDIATE")
+
+			// Upsert in both directions for bidirectional association
+			const pairs: [string, string][] = [
+				[sourceId, targetId],
+				[targetId, sourceId],
+			]
+			for (const [src, tgt] of pairs) {
+				this.db
+					.prepare(`
+          INSERT INTO location_associations
+          (id, source_id, target_id, strength, co_access_count, last_co_access, created_at)
+          VALUES (?, ?, ?, ?, 1, ?, ?)
+          ON CONFLICT(source_id, target_id) DO UPDATE SET
+            co_access_count = co_access_count + ?,
+            strength = 1.0 - 1.0 / (1.0 + 0.1 * (co_access_count + ?)),
+            last_co_access = excluded.last_co_access
+        `)
+					.run(
+						randomUUID(),
+						src,
+						tgt,
+						initialStrength,
+						now,
+						now,
+						multiplier,
+						multiplier
+					)
+			}
+
+			this.db.exec("COMMIT")
+		} catch (error) {
+			this.db.exec("ROLLBACK")
+			console.error("[lucid] Failed to strengthen location association:", error)
 		}
 	}
 
@@ -1715,6 +1863,10 @@ export class LucidStorage {
 			}
 		} catch (error) {
 			this.db.exec("ROLLBACK")
+			console.error(
+				`[lucid] Failed to merge locations '${oldPath}' -> '${newPath}':`,
+				error
+			)
 			throw error
 		}
 	}
@@ -1754,7 +1906,12 @@ export class LucidStorage {
           AND is_summary = 0
           ORDER BY accessed_at DESC LIMIT 1
         `)
-					.get(locationId, group.activity_type) as LocationAccessContextRow
+					.get(locationId, group.activity_type) as
+					| LocationAccessContextRow
+					| undefined
+
+				// Skip if no representative found (shouldn't happen, but defensive)
+				if (!representative) continue
 
 				// Create summary record
 				this.db
@@ -1828,8 +1985,12 @@ export class LucidStorage {
 			contextDescription: row.context_description,
 			wasDirectAccess: row.was_direct_access === 1,
 			taskContext: row.task_context,
-			activityType: row.activity_type as ActivityType,
-			activitySource: row.activity_source as InferenceSource,
+			activityType: isActivityType(row.activity_type)
+				? row.activity_type
+				: "unknown",
+			activitySource: isInferenceSource(row.activity_source)
+				? row.activity_source
+				: "default",
 			isSummary: row.is_summary === 1,
 			accessedAt: row.accessed_at,
 		}
@@ -1851,8 +2012,8 @@ export class LucidStorage {
 			.prepare(`
       INSERT INTO visual_memories
       (id, description, original_path, media_type, objects, emotional_valence, emotional_arousal,
-       significance, shared_by, source, received_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       significance, shared_by, source, received_at, created_at, project_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 			.run(
 				id,
@@ -1866,7 +2027,8 @@ export class LucidStorage {
 				input.sharedBy ?? null,
 				input.source,
 				now,
-				now
+				now,
+				input.projectId ?? null
 			)
 
 		// Record initial access
@@ -1954,13 +2116,14 @@ export class LucidStorage {
 
 		if (!row) return null
 
-		return Array.from(
-			new Float32Array(
+		// LOW-4: Use spread operator instead of Array.from() for better performance
+		return [
+			...new Float32Array(
 				row.vector.buffer,
 				row.vector.byteOffset,
 				row.vector.byteLength / 4
-			)
-		)
+			),
+		]
 	}
 
 	/**
@@ -1973,13 +2136,14 @@ export class LucidStorage {
 
 		const map = new Map<string, number[]>()
 		for (const row of rows) {
-			const vector = Array.from(
-				new Float32Array(
+			// LOW-4: Use spread operator instead of Array.from() for better performance
+			const vector = [
+				...new Float32Array(
 					row.vector.buffer,
 					row.vector.byteOffset,
 					row.vector.byteLength / 4
-				)
-			)
+				),
+			]
 			map.set(row.visual_memory_id, vector)
 		}
 		return map
@@ -2097,7 +2261,7 @@ export class LucidStorage {
 			description: row.description,
 			originalPath: row.original_path,
 			mediaType: row.media_type as VisualMediaType,
-			objects: JSON.parse(row.objects || "[]"),
+			objects: safeJsonParse<string[]>(row.objects, []),
 			emotionalValence: row.emotional_valence,
 			emotionalArousal: row.emotional_arousal,
 			significance: row.significance,
@@ -2107,6 +2271,7 @@ export class LucidStorage {
 			lastAccessed: row.last_accessed,
 			accessCount: row.access_count,
 			createdAt: row.created_at,
+			projectId: row.project_id,
 		}
 	}
 
@@ -2214,6 +2379,138 @@ export class LucidStorage {
 		}
 	}
 
+	// ============================================================================
+	// Sessions (Phase 4: Temporal Retrieval)
+	// ============================================================================
+
+	/** Inactivity threshold for session expiration (30 minutes) */
+	private readonly SESSION_INACTIVITY_MS = 30 * 60 * 1000
+
+	/**
+	 * Get or create a session for the current context.
+	 * Sessions auto-expire after 30 minutes of inactivity.
+	 *
+	 * @param projectId - Optional project ID for project-scoped sessions
+	 * @returns Session ID (existing or newly created)
+	 */
+	getOrCreateSession(projectId?: string): string {
+		const now = Date.now()
+		const projectKey = projectId ?? ""
+
+		// Find recent active session for this project
+		const row = this.db
+			.prepare(
+				`
+			SELECT id, last_active_at FROM sessions
+			WHERE project_id = ? AND ended_at IS NULL
+			ORDER BY last_active_at DESC LIMIT 1
+		`
+			)
+			.get(projectKey) as { id: string; last_active_at: number } | undefined
+
+		if (row && now - row.last_active_at < this.SESSION_INACTIVITY_MS) {
+			// Update activity and return existing session
+			this.db
+				.prepare(`UPDATE sessions SET last_active_at = ? WHERE id = ?`)
+				.run(now, row.id)
+			return row.id
+		}
+
+		// Close old session if exists
+		if (row) {
+			this.db
+				.prepare(`UPDATE sessions SET ended_at = ? WHERE id = ?`)
+				.run(now, row.id)
+		}
+
+		// Create new session
+		const sessionId = randomUUID()
+		this.db
+			.prepare(
+				`
+			INSERT INTO sessions (id, started_at, project_id, last_active_at)
+			VALUES (?, ?, ?, ?)
+		`
+			)
+			.run(sessionId, now, projectKey, now)
+
+		return sessionId
+	}
+
+	/**
+	 * Update session activity timestamp (touch).
+	 *
+	 * @param sessionId - Session ID to update
+	 */
+	touchSession(sessionId: string): void {
+		const now = Date.now()
+		this.db
+			.prepare(`UPDATE sessions SET last_active_at = ? WHERE id = ?`)
+			.run(now, sessionId)
+	}
+
+	/**
+	 * Get the current active session for a project (if any).
+	 *
+	 * @param projectId - Optional project ID
+	 * @returns Session ID if active, undefined otherwise
+	 */
+	getCurrentSession(projectId?: string): string | undefined {
+		const now = Date.now()
+		const projectKey = projectId ?? ""
+
+		const row = this.db
+			.prepare(
+				`
+			SELECT id, last_active_at FROM sessions
+			WHERE project_id = ? AND ended_at IS NULL
+			ORDER BY last_active_at DESC LIMIT 1
+		`
+			)
+			.get(projectKey) as { id: string; last_active_at: number } | undefined
+
+		if (row && now - row.last_active_at < this.SESSION_INACTIVITY_MS) {
+			return row.id
+		}
+
+		return undefined
+	}
+
+	/**
+	 * End a session explicitly.
+	 *
+	 * @param sessionId - Session ID to end
+	 */
+	endSession(sessionId: string): void {
+		const now = Date.now()
+		this.db
+			.prepare(`UPDATE sessions SET ended_at = ? WHERE id = ?`)
+			.run(now, sessionId)
+	}
+
+	/**
+	 * Prune expired sessions older than the specified time.
+	 * QW-4: Prevents DB bloat from accumulated expired sessions.
+	 *
+	 * @param beforeMs - Delete sessions ended before this timestamp (default: 7 days ago)
+	 * @returns Number of sessions deleted
+	 */
+	pruneExpiredSessions(
+		beforeMs: number = Date.now() - 7 * 24 * 60 * 60 * 1000
+	): number {
+		try {
+			const result = this.db
+				.prepare(
+					`DELETE FROM sessions WHERE ended_at IS NOT NULL AND ended_at < ?`
+				)
+				.run(beforeMs)
+			return result.changes
+		} catch (error) {
+			console.error("[lucid] Failed to prune expired sessions:", error)
+			return 0
+		}
+	}
+
 	/**
 	 * Close the database connection.
 	 */
@@ -2236,7 +2533,7 @@ export class LucidStorage {
 			accessCount: row.access_count,
 			emotionalWeight: row.emotional_weight,
 			projectId: row.project_id,
-			tags: JSON.parse(row.tags || "[]"),
+			tags: safeJsonParse<string[]>(row.tags, []),
 		}
 	}
 
@@ -2246,7 +2543,7 @@ export class LucidStorage {
 			path: row.path,
 			name: row.name,
 			lastActive: row.last_active,
-			context: JSON.parse(row.context || "{}"),
+			context: safeJsonParse<Record<string, unknown>>(row.context, {}),
 		}
 	}
 }
@@ -2323,4 +2620,5 @@ interface VisualMemoryRow {
 	last_accessed: number | null
 	access_count: number
 	created_at: number
+	project_id: string | null
 }

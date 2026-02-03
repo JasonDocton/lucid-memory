@@ -12,36 +12,34 @@
     },
     "packages/lucid-native": {
       "name": "@lucid-memory/native",
-      "version": "0.1.0",
+      "version": "0.3.6",
       "devDependencies": {
         "@napi-rs/cli": "^3.0.0-alpha.77",
       },
     },
     "packages/lucid-perception": {
       "name": "@lucid-memory/perception",
-      "version": "0.1.0",
+      "version": "0.3.6",
       "devDependencies": {
         "@napi-rs/cli": "^3.0.0-alpha.62",
       },
     },
     "packages/lucid-server": {
       "name": "lucid-server",
-      "version": "0.1.0",
+      "version": "0.3.6",
       "bin": {
         "lucid-server": "./src/server.ts",
         "lucid": "./src/cli.ts",
       },
       "dependencies": {
         "@lucid-memory/native": "file:../lucid-native",
+        "@lucid-memory/perception": "file:../lucid-perception",
         "@modelcontextprotocol/sdk": "^1.0.0",
         "zod": "^3.23.0",
       },
       "devDependencies": {
         "@types/bun": "latest",
         "typescript": "^5.0.0",
-      },
-      "optionalDependencies": {
-        "@lucid-memory/perception": "file:../lucid-perception",
       },
     },
   },

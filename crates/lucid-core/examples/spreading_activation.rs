@@ -43,6 +43,7 @@ fn main() {
 
 	let emotional_weights = vec![0.5, 0.4, 0.8, 0.7, 0.3]; // Paris café is emotionally charged
 	let decay_rates = vec![0.5; 5];
+	let working_memory_boosts = vec![1.0; 5]; // No WM boost in this example
 
 	// Define the association graph
 	let associations = vec![
@@ -100,6 +101,7 @@ fn main() {
 		access_histories_ms: &access_histories,
 		emotional_weights: &emotional_weights,
 		decay_rates: &decay_rates,
+		working_memory_boosts: &working_memory_boosts,
 		associations: &[], // No associations
 		current_time_ms,
 	};
@@ -128,6 +130,7 @@ fn main() {
 		access_histories_ms: &access_histories,
 		emotional_weights: &emotional_weights,
 		decay_rates: &decay_rates,
+		working_memory_boosts: &working_memory_boosts,
 		associations: &associations,
 		current_time_ms,
 	};

@@ -85,6 +85,10 @@ pub struct RetrievalInput<'a> {
 	pub emotional_weights: &'a [f64],
 	/// Per-memory decay rates (allows type-specific and emotional modulation)
 	pub decay_rates: &'a [f64],
+	/// Working memory boost for each memory (1.0 = no boost, up to 2.0 = max boost)
+	/// Applied to similarity BEFORE nonlinear activation (MINERVA 2 cubing).
+	/// This models how prefrontal WM modulates hippocampal retrieval in real-time.
+	pub working_memory_boosts: &'a [f64],
 	/// Association graph edges
 	pub associations: &'a [Association],
 	/// Current time (ms)
@@ -113,10 +117,24 @@ pub fn retrieve(input: &RetrievalInput<'_>, config: &RetrievalConfig) -> Vec<Ret
 	// 1. Compute probe-trace similarities (batch)
 	let similarities = cosine_similarity_batch(input.probe_embedding, input.memory_embeddings);
 
-	// 2. Apply nonlinear activation (MINERVA 2)
-	let probe_activations = nonlinear_activation_batch(&similarities);
+	// 2. Apply Working Memory boost to similarities BEFORE nonlinear activation
+	// This models how prefrontal WM modulates hippocampal retrieval in real-time.
+	// WM boost is applied to the similarity signal, then cubed (MINERVA 2).
+	// Biologically: PFC attention → enhanced encoding strength → stronger trace match
+	let boosted_similarities: Vec<f64> = similarities
+		.iter()
+		.enumerate()
+		.map(|(i, &sim)| {
+			let boost = input.working_memory_boosts.get(i).copied().unwrap_or(1.0);
+			// Cap at 1.0 to maintain valid similarity range
+			(sim * boost).min(1.0)
+		})
+		.collect();
 
-	// 3. Compute base-level activation (batch) with per-memory decay rates
+	// 3. Apply nonlinear activation (MINERVA 2) to boosted similarities
+	let probe_activations = nonlinear_activation_batch(&boosted_similarities);
+
+	// 4. Compute base-level activation (batch) with per-memory decay rates
 	let base_levels: Vec<f64> = input
 		.access_histories_ms
 		.iter()
@@ -131,7 +149,7 @@ pub fn retrieve(input: &RetrievalInput<'_>, config: &RetrievalConfig) -> Vec<Ret
 		})
 		.collect();
 
-	// 4. Initial activation (before spreading)
+	// 5. Initial activation (before spreading)
 	let initial_activations: Vec<f64> = (0..n)
 		.map(|i| {
 			let base = if base_levels[i].is_finite() {
@@ -145,7 +163,7 @@ pub fn retrieve(input: &RetrievalInput<'_>, config: &RetrievalConfig) -> Vec<Ret
 		})
 		.collect();
 
-	// 5. Find seeds for spreading (top activated)
+	// 6. Find seeds for spreading (top activated)
 	let mut seeds: Vec<(usize, f64)> = initial_activations
 		.iter()
 		.enumerate()
@@ -155,7 +173,7 @@ pub fn retrieve(input: &RetrievalInput<'_>, config: &RetrievalConfig) -> Vec<Ret
 	seeds.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 	seeds.truncate(5); // Top 5 as seeds
 
-	// 6. Spread activation
+	// 7. Spread activation
 	let spreading_result = if !seeds.is_empty() && config.spreading_depth > 0 {
 		let seed_indices: Vec<usize> = seeds.iter().map(|(i, _)| *i).collect();
 		let seed_activations: Vec<f64> = seeds.iter().map(|(_, a)| *a).collect();
@@ -182,7 +200,7 @@ pub fn retrieve(input: &RetrievalInput<'_>, config: &RetrievalConfig) -> Vec<Ret
 		}
 	};
 
-	// 7. Combine all activations and build candidates
+	// 8. Combine all activations and build candidates
 	let mut candidates: Vec<RetrievalCandidate> = (0..n)
 		.filter_map(|i| {
 			let base_level = if base_levels[i].is_finite() {
@@ -223,7 +241,7 @@ pub fn retrieve(input: &RetrievalInput<'_>, config: &RetrievalConfig) -> Vec<Ret
 		})
 		.collect();
 
-	// 8. Sort by total activation and limit
+	// 9. Sort by total activation and limit
 	candidates.sort_by(|a, b| {
 		b.total_activation
 			.partial_cmp(&a.total_activation)
@@ -307,6 +325,7 @@ mod tests {
 			access_histories_ms: &[],
 			emotional_weights: &[],
 			decay_rates: &[],
+			working_memory_boosts: &[],
 			associations: &[],
 			current_time_ms: 1_000_000.0,
 		};
@@ -332,6 +351,7 @@ mod tests {
 			access_histories_ms: &[vec![now], vec![now], vec![now]], // Recent access
 			emotional_weights: &[0.5, 0.5, 0.5],
 			decay_rates: &[0.05, 0.05, 0.05],
+			working_memory_boosts: &[1.0, 1.0, 1.0], // No boost
 			associations: &[],
 			current_time_ms: now,
 		};
@@ -363,5 +383,77 @@ mod tests {
 		let b = vec![0.0, 1.0, 0.0];
 		let surprise = compute_surprise(&a, &b, 1.0, 0.5, 0.5);
 		assert!(surprise > 0.5); // High surprise for orthogonal
+	}
+
+	#[test]
+	fn test_working_memory_boost() {
+		let probe = vec![1.0, 0.0, 0.0];
+		let memories = vec![
+			vec![0.7, 0.7, 0.0], // Moderately similar (sim ≈ 0.707)
+			vec![0.7, 0.7, 0.0], // Same similarity, but will get WM boost
+		];
+		let now = 1_000_000.0;
+
+		let input = RetrievalInput {
+			probe_embedding: &probe,
+			memory_embeddings: &memories,
+			access_histories_ms: &[vec![now], vec![now]],
+			emotional_weights: &[0.5, 0.5],
+			decay_rates: &[0.5, 0.5],
+			working_memory_boosts: &[1.0, 2.0], // Memory 1 gets 2x WM boost
+			associations: &[],
+			current_time_ms: now,
+		};
+
+		let config = RetrievalConfig {
+			spreading_depth: 0,
+			min_probability: 0.0,
+			..Default::default()
+		};
+
+		let result = retrieve(&input, &config);
+
+		// Memory 1 (with WM boost) should rank higher
+		assert!(!result.is_empty());
+		assert_eq!(result[0].index, 1, "WM-boosted memory should rank first");
+		assert!(
+			result[0].total_activation > result[1].total_activation,
+			"WM-boosted memory should have higher activation"
+		);
+	}
+
+	#[test]
+	fn test_working_memory_boost_caps_similarity() {
+		let probe = vec![1.0, 0.0, 0.0];
+		let memories = vec![
+			vec![0.9, 0.436, 0.0], // High similarity (≈0.9)
+		];
+		let now = 1_000_000.0;
+
+		let input = RetrievalInput {
+			probe_embedding: &probe,
+			memory_embeddings: &memories,
+			access_histories_ms: &[vec![now]],
+			emotional_weights: &[0.5],
+			decay_rates: &[0.5],
+			working_memory_boosts: &[2.0], // 2x boost would exceed 1.0, should cap
+			associations: &[],
+			current_time_ms: now,
+		};
+
+		let config = RetrievalConfig {
+			spreading_depth: 0,
+			min_probability: 0.0,
+			..Default::default()
+		};
+
+		let result = retrieve(&input, &config);
+
+		// Probe activation should be capped at 1.0^3 = 1.0
+		assert!(!result.is_empty());
+		assert!(
+			result[0].probe_activation <= 1.0,
+			"Probe activation should be capped at 1.0"
+		);
 	}
 }
