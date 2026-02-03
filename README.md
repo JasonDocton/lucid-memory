@@ -15,6 +15,8 @@ curl -fsSL lucidmemory.dev/install | bash
 
 **New in 0.4.0:** <a href="#location-intuitions">Procedural Memory</a> — Claude learns your workflow, develops instincts, and creates muscle memory for actions. No more searching or directing Claude to common file locations - it just knows.
 
+**Coming in 0.5.0:** Episodic Memory</a> — Claude remembers not just what happened, but how it unfolded —reconstructing the story of your debugging session, not just the fix.
+
 ---
 
 ## 100x Faster Than Cloud RAG
