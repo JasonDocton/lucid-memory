@@ -2,7 +2,7 @@
 
 **2.7ms retrieval. 743,000 memories/second. $0/query.**
 
-Memory for AI coding assistants that actually works like memory—local, fast, and cognitive. Give your AI the power to remember beyond compaction, across any number of projects—and all with less token use or context than most SKILL.md files.
+Memory for AI coding assistants that actually works like memory—local, fast, and cognitive. Lucid Memory is not a vector database, but a retrieval layer that makes vector databases obsolete for AI memory.
 
 ```bash
 curl -fsSL lucidmemory.dev/install | bash
