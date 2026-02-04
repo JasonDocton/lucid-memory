@@ -153,7 +153,7 @@ export class LucidRetrieval {
 	// MED-5: Association cache to avoid repeated full table scans
 	private associationCache: { data: Association[]; cachedAt: number } | null =
 		null
-	private readonly associationCacheTtlMs = 60000 // 60 second TTL (QW-2: reduces DB queries)
+	private readonly associationCacheTtlMs = 300000 // 5 minute TTL - associations rarely change
 
 	// Auto-association settings
 	// When a memory is stored, automatically link it to recent similar memories
@@ -357,15 +357,7 @@ export class LucidRetrieval {
 		const cacheKey = projectId ?? ""
 		const now = Date.now()
 
-		// LOW-6: Only prune every TTL interval to avoid O(n) on every call
-		if (now - this.sessionCacheLastPruneAt >= this.sessionCacheTtlMs) {
-			for (const [key, entry] of this.sessionCache) {
-				if (now - entry.touchedAt >= this.sessionCacheTtlMs) {
-					this.sessionCache.delete(key)
-				}
-			}
-			this.sessionCacheLastPruneAt = now
-		}
+		this.pruneSessionCacheIfNeeded()
 
 		// Check cache first
 		const cached = this.sessionCache.get(cacheKey)
@@ -383,6 +375,22 @@ export class LucidRetrieval {
 	}
 
 	/**
+	 * Prune stale entries from session cache.
+	 * Called periodically to prevent memory leaks in long-running sessions.
+	 */
+	private pruneSessionCacheIfNeeded(): void {
+		const now = Date.now()
+		if (now - this.sessionCacheLastPruneAt >= this.sessionCacheTtlMs) {
+			for (const [key, entry] of this.sessionCache) {
+				if (now - entry.touchedAt >= this.sessionCacheTtlMs) {
+					this.sessionCache.delete(key)
+				}
+			}
+			this.sessionCacheLastPruneAt = now
+		}
+	}
+
+	/**
 	 * Get the current session ID for a project (if any).
 	 * Unlike getOrCreateSession, this does not create a new session.
 	 *
@@ -390,6 +398,7 @@ export class LucidRetrieval {
 	 * @returns Session ID if active, undefined otherwise
 	 */
 	getCurrentSession(projectId?: string): string | undefined {
+		this.pruneSessionCacheIfNeeded()
 		return this.storage.getCurrentSession(projectId)
 	}
 
@@ -410,6 +419,13 @@ export class LucidRetrieval {
 			this.storage.getAllForRetrieval(projectId)
 		const associations = this.getCachedAssociations()
 
+		// Build memory ID to index map once (O(n) instead of O(n²) from repeated indexOf)
+		const memoryIndexMap = new Map<string, number>()
+		for (let i = 0; i < memories.length; i++) {
+			const m = memories[i]
+			if (m) memoryIndexMap.set(m.id, i)
+		}
+
 		// Filter by type if specified
 		const filteredMemories = options.filterType
 			? memories.filter((m) => m.type === options.filterType)
@@ -426,7 +442,7 @@ export class LucidRetrieval {
 			const now = Date.now()
 			const candidates: RetrievalCandidate[] = filteredMemories.map(
 				(memory, _i) => {
-					const history = accessHistories[memories.indexOf(memory)] ?? []
+					const history = accessHistories[memoryIndexMap.get(memory.id) ?? -1] ?? []
 					// Phase 2: Use session-aware decay rate
 					const lastAccess = history.length > 0 ? history[0] : 0
 					const decayRate = this.getSessionDecayRate(lastAccess, now)
@@ -475,7 +491,7 @@ export class LucidRetrieval {
 			const now = Date.now()
 			const candidates: RetrievalCandidate[] = filteredMemories.map(
 				(memory, _i) => {
-					const history = accessHistories[memories.indexOf(memory)] ?? []
+					const history = accessHistories[memoryIndexMap.get(memory.id) ?? -1] ?? []
 					const lastAccess = history.length > 0 ? history[0] : 0
 					const decayRate = this.getSessionDecayRate(lastAccess, now)
 					const baseLevel =
@@ -526,11 +542,11 @@ export class LucidRetrieval {
 			const embedding = embeddingsMap.get(memory.id)
 			if (!embedding) continue
 
-			// HIGH-6: Validate indexOf result before using as array index
-			const originalIdx = memories.indexOf(memory)
-			if (originalIdx === -1) {
+			// Use pre-built index map instead of O(n) indexOf
+			const originalIdx = memoryIndexMap.get(memory.id)
+			if (originalIdx === undefined) {
 				console.error(
-					"[lucid] Memory not found in array during retrieval:",
+					"[lucid] Memory not found in index map during retrieval:",
 					memory.id
 				)
 				continue

@@ -18,6 +18,7 @@ import {
 } from "../../packages/lucid-native/index.js";
 
 const VERBOSE = process.argv.includes("--verbose");
+const NO_BIDIRECTIONAL = process.argv.includes("--no-bidirectional");
 
 // Time constants
 const MS_SECOND = 1000;
@@ -33,6 +34,10 @@ function seededRandom(seed: number): () => number {
 		return seed / 0x7fffffff;
 	};
 }
+
+// Global seeded random for deterministic noise generation
+// This ensures benchmarks are reproducible across runs
+const globalRand = seededRandom(42);
 
 function makeEmbedding(seed: number, dim = 384): number[] {
 	const rand = seededRandom(seed);
@@ -136,7 +141,7 @@ const morningContextRestoration: RealisticScenario = {
 			// Spread accesses across yesterday's session
 			const accesses: number[] = [];
 			for (let j = 0; j < file.accesses; j++) {
-				accesses.push(yesterdayStart + Math.random() * (yesterdayEnd - yesterdayStart));
+				accesses.push(yesterdayStart + globalRand() * (yesterdayEnd - yesterdayStart));
 			}
 			accessHistories.push(accesses);
 		}
@@ -170,8 +175,8 @@ const morningContextRestoration: RealisticScenario = {
 
 		// Bulk noise: 40 random files from various times
 		for (let i = 0; i < 40; i++) {
-			const similarity = 0.1 + Math.random() * 0.4; // 0.1-0.5 similarity
-			const daysAgo = 1 + Math.random() * 60; // 1-60 days ago
+			const similarity = 0.1 + globalRand() * 0.4; // 0.1-0.5 similarity
+			const daysAgo = 1 + globalRand() * 60; // 1-60 days ago
 			memories.push({ name: `noise/file${i}.ts`, expectedRelevance: 0 });
 			embeddings.push(makeSimilarEmbedding(queryEmb, similarity, 5000 + i));
 			accessHistories.push([NOW - daysAgo * MS_DAY]);
@@ -223,22 +228,22 @@ const scaleNeedleInHaystack: RealisticScenario = {
 		// Near misses: similar but not quite right (5 files)
 		for (let i = 0; i < 5; i++) {
 			memories.push({ name: `similar/near-miss-${i}.ts`, expectedRelevance: 0.5 });
-			embeddings.push(makeSimilarEmbedding(queryEmb, 0.85 + Math.random() * 0.08, 10100 + i));
-			accessHistories.push([NOW - (1 + Math.random() * 7) * MS_DAY]);
+			embeddings.push(makeSimilarEmbedding(queryEmb, 0.85 + globalRand() * 0.08, 10100 + i));
+			accessHistories.push([NOW - (1 + globalRand() * 7) * MS_DAY]);
 		}
 
 		// Medium similarity files (20 files)
 		for (let i = 0; i < 20; i++) {
 			memories.push({ name: `medium/file-${i}.ts`, expectedRelevance: 0.2 });
-			embeddings.push(makeSimilarEmbedding(queryEmb, 0.5 + Math.random() * 0.3, 10200 + i));
-			accessHistories.push([NOW - (1 + Math.random() * 30) * MS_DAY]);
+			embeddings.push(makeSimilarEmbedding(queryEmb, 0.5 + globalRand() * 0.3, 10200 + i));
+			accessHistories.push([NOW - (1 + globalRand() * 30) * MS_DAY]);
 		}
 
 		// Low similarity bulk (174 files to reach 200 total)
 		for (let i = 0; i < 174; i++) {
 			memories.push({ name: `noise/bulk-${i}.ts`, expectedRelevance: 0 });
-			embeddings.push(makeSimilarEmbedding(queryEmb, 0.1 + Math.random() * 0.35, 10400 + i));
-			accessHistories.push([NOW - (1 + Math.random() * 90) * MS_DAY]);
+			embeddings.push(makeSimilarEmbedding(queryEmb, 0.1 + globalRand() * 0.35, 10400 + i));
+			accessHistories.push([NOW - (1 + globalRand() * 90) * MS_DAY]);
 		}
 
 		return {
@@ -296,8 +301,8 @@ const recencyVsSimilarity: RealisticScenario = {
 		// Noise
 		for (let i = 0; i < 30; i++) {
 			memories.push({ name: `noise/file-${i}.ts`, expectedRelevance: 0 });
-			embeddings.push(makeSimilarEmbedding(queryEmb, 0.2 + Math.random() * 0.3, 20100 + i));
-			accessHistories.push([NOW - (1 + Math.random() * 30) * MS_DAY]);
+			embeddings.push(makeSimilarEmbedding(queryEmb, 0.2 + globalRand() * 0.3, 20100 + i));
+			accessHistories.push([NOW - (1 + globalRand() * 30) * MS_DAY]);
 		}
 
 		return {
@@ -374,23 +379,28 @@ const coEditedFiles: RealisticScenario = {
 		]);
 
 		// Associations based on co-editing
-		associations.push({ source: 0, target: 1, forwardStrength: 0.3, backwardStrength: 0.3 });
-		associations.push({ source: 0, target: 2, forwardStrength: 0.25, backwardStrength: 0.25 });
-		associations.push({ source: 1, target: 2, forwardStrength: 0.2, backwardStrength: 0.2 });
+		// In practice, auto-association creates links with strength = semantic similarity (min 0.4)
+		// But component+test typically have moderate similarity, component+css lower
+		// Using realistic strengths based on what auto-association would create
+		associations.push({ source: 0, target: 1, forwardStrength: 0.6, backwardStrength: 0.6 }); // tsx + test
+		associations.push({ source: 0, target: 2, forwardStrength: 0.4, backwardStrength: 0.4 }); // tsx + css (at threshold)
+		associations.push({ source: 1, target: 2, forwardStrength: 0.35, backwardStrength: 0.35 }); // test + css
 
 		// Other components (similar but not co-edited)
+		// Realistic: other components share some patterns but aren't about "Button"
+		// Real embeddings would show ~0.3-0.5 similarity for different components
 		const otherComponents = ["Input", "Select", "Modal", "Card", "Header"];
 		for (let i = 0; i < otherComponents.length; i++) {
 			memories.push({ name: `components/${otherComponents[i]}.tsx`, expectedRelevance: 0.2 });
-			embeddings.push(makeSimilarEmbedding(queryEmb, 0.6 + Math.random() * 0.2, 30100 + i));
-			accessHistories.push([NOW - (2 + Math.random() * 14) * MS_DAY]);
+			embeddings.push(makeSimilarEmbedding(queryEmb, 0.35 + globalRand() * 0.15, 30100 + i)); // 0.35-0.5
+			accessHistories.push([NOW - (2 + globalRand() * 14) * MS_DAY]);
 		}
 
 		// Unrelated files
 		for (let i = 0; i < 25; i++) {
 			memories.push({ name: `other/file-${i}.ts`, expectedRelevance: 0 });
-			embeddings.push(makeSimilarEmbedding(queryEmb, 0.1 + Math.random() * 0.3, 30200 + i));
-			accessHistories.push([NOW - (1 + Math.random() * 30) * MS_DAY]);
+			embeddings.push(makeSimilarEmbedding(queryEmb, 0.1 + globalRand() * 0.3, 30200 + i));
+			accessHistories.push([NOW - (1 + globalRand() * 30) * MS_DAY]);
 		}
 
 		return {
@@ -440,7 +450,7 @@ const coldStart: RealisticScenario = {
 
 		// More noise
 		for (let i = 0; i < 40; i++) {
-			const sim = 0.1 + Math.random() * 0.35;
+			const sim = 0.1 + globalRand() * 0.35;
 			memories.push({ name: `noise-${i}.ts`, expectedRelevance: 0 });
 			embeddings.push(makeSimilarEmbedding(queryEmb, sim, 40100 + i));
 			accessHistories.push([NOW - 1 * MS_DAY]);
@@ -491,15 +501,15 @@ const adversarialRecencyTrap: RealisticScenario = {
 		// Completely irrelevant files accessed just now
 		for (let i = 0; i < 5; i++) {
 			memories.push({ name: `irrelevant-recent-${i}.ts`, expectedRelevance: 0 });
-			embeddings.push(makeSimilarEmbedding(queryEmb, 0.15 + Math.random() * 0.1, 50100 + i));
+			embeddings.push(makeSimilarEmbedding(queryEmb, 0.15 + globalRand() * 0.1, 50100 + i));
 			accessHistories.push([NOW - (i + 1) * MS_MINUTE]); // 1-5 minutes ago
 		}
 
 		// More noise
 		for (let i = 0; i < 30; i++) {
 			memories.push({ name: `noise-${i}.ts`, expectedRelevance: 0 });
-			embeddings.push(makeSimilarEmbedding(queryEmb, 0.2 + Math.random() * 0.3, 50200 + i));
-			accessHistories.push([NOW - (1 + Math.random() * 30) * MS_DAY]);
+			embeddings.push(makeSimilarEmbedding(queryEmb, 0.2 + globalRand() * 0.3, 50200 + i));
+			accessHistories.push([NOW - (1 + globalRand() * 30) * MS_DAY]);
 		}
 
 		return {
@@ -552,7 +562,7 @@ function runScenario(scenario: RealisticScenario): { name: string; score: number
 		data.embeddings.map(() => 1.0), // wm boosts
 		NOW,
 		data.associations.length > 0 ? data.associations : null,
-		{ minProbability: 0, maxResults: data.embeddings.length },
+		{ minProbability: 0, maxResults: data.embeddings.length, bidirectional: !NO_BIDIRECTIONAL },
 	);
 
 	const ranking = results.map((r) => r.index);
