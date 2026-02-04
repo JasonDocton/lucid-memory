@@ -150,7 +150,7 @@ pub fn retrieve(input: &RetrievalInput<'_>, config: &RetrievalConfig) -> Vec<Ret
 		.collect();
 
 	// 5. Initial activation (before spreading)
-	// Emotional weight modulates probe activation only (not base-level)
+	// Uses MULTIPLICATIVE combination: similarity is primary, recency is boost
 	let initial_activations: Vec<f64> = (0..n)
 		.map(|i| {
 			let base = if base_levels[i].is_finite() {
@@ -160,15 +160,21 @@ pub fn retrieve(input: &RetrievalInput<'_>, config: &RetrievalConfig) -> Vec<Ret
 			};
 			let emotional = input.emotional_weights.get(i).copied().unwrap_or(0.5);
 			let emotional_multiplier = 1.0 + (emotional - 0.5);
-			probe_activations[i].mul_add(emotional_multiplier, base)
+
+			// Normalize base-level to [0, 1] for multiplicative boost
+			let recency_boost = ((base + 10.0) / 10.0).clamp(0.0, 1.0);
+
+			// Multiplicative: probe * emotional * (1 + recency)
+			probe_activations[i] * emotional_multiplier * (1.0 + recency_boost)
 		})
 		.collect();
 
 	// 6. Find seeds for spreading (top activated)
+	// With multiplicative formula, use probe activation threshold instead
 	let mut seeds: Vec<(usize, f64)> = initial_activations
 		.iter()
 		.enumerate()
-		.filter(|(_, &a)| a > 0.0)
+		.filter(|(i, _)| probe_activations[*i] > 0.1) // Minimum similarity threshold
 		.map(|(i, &a)| (i, a))
 		.collect();
 	seeds.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));

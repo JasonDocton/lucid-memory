@@ -212,12 +212,15 @@ pub fn nonlinear_activation_batch(similarities: &[f64]) -> Vec<f64> {
 
 /// Combine all activation sources into total activation.
 ///
-/// Emotional weight modulates the probe activation (relevance signal),
-/// not the base-level activation (recency/frequency). This is cognitively
-/// plausible: emotion affects how strongly a memory resonates with a cue,
-/// not how recently it was accessed.
+/// Uses MULTIPLICATIVE combination where similarity is the primary signal
+/// and recency acts as a boost multiplier, not an additive override.
 ///
-/// `Total = baseLevel + (probeActivation × emotionalMultiplier) + spreading`
+/// This prevents recent-but-irrelevant items from beating old-but-relevant items.
+///
+/// Formula: `Total = (probe × emotional × (1 + recency_boost)) + spreading`
+///
+/// Where `recency_boost = max(0, (base_level + 10) / 10)` maps base-level
+/// from [-10, 0] to [0, 1], so very recent items get up to 2x boost.
 #[must_use]
 pub fn combine_activations(
 	base_level: f64,
@@ -226,7 +229,6 @@ pub fn combine_activations(
 	emotional_weight: f64,
 ) -> ActivationBreakdown {
 	// Emotional weight modulates probe activation (range: 0.5 to 1.5)
-	// This ensures emotional memories resonate more strongly with matching cues
 	let emotional_multiplier = 1.0 + (emotional_weight - 0.5);
 
 	// Handle -infinity base level
@@ -236,10 +238,18 @@ pub fn combine_activations(
 		-10.0
 	};
 
-	// Apply emotional modulation to probe activation only
-	// Base-level (recency/frequency) is independent of emotional salience
+	// Normalize base-level to [0, 1] for multiplicative boost
+	// Base-level typically ranges from -10 (very old) to 0 (just accessed)
+	// This maps to recency_boost of 0 to 1, giving total multiplier of 1x to 2x
+	let recency_boost = ((effective_base + 10.0) / 10.0).clamp(0.0, 1.0);
+
+	// Apply emotional modulation to probe activation
 	let modulated_probe = probe_activation * emotional_multiplier;
-	let total = effective_base + modulated_probe + spreading_activation;
+
+	// MULTIPLICATIVE combination: similarity is primary, recency is boost
+	// This ensures low-similarity items can't be rescued by recency alone
+	let probe_with_recency = modulated_probe * (1.0 + recency_boost);
+	let total = probe_with_recency + spreading_activation;
 
 	ActivationBreakdown {
 		base_level: effective_base,
