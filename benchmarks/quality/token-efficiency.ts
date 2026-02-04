@@ -14,9 +14,9 @@
  */
 
 import {
-	retrieve,
 	cosineSimilarityBatch,
 	type JsAssociation,
+	retrieve,
 } from "../../packages/lucid-native/index.js"
 
 const VERBOSE = process.argv.includes("--verbose")
@@ -34,7 +34,10 @@ function estimateTokens(text: string): number {
 }
 
 // Generate realistic memory content
-function generateMemoryContent(seed: number, type: "short" | "medium" | "long"): string {
+function generateMemoryContent(
+	seed: number,
+	type: "short" | "medium" | "long"
+): string {
 	const templates = {
 		short: [
 			"Fixed bug in {module} where {issue} caused {effect}.",
@@ -50,9 +53,34 @@ function generateMemoryContent(seed: number, type: "short" | "medium" | "long"):
 		],
 	}
 
-	const modules = ["auth", "api", "database", "cache", "payment", "user", "admin", "search", "notification", "logging"]
-	const issues = ["null pointer", "race condition", "memory leak", "timeout", "validation error", "encoding issue"]
-	const features = ["caching", "retry logic", "batch processing", "rate limiting", "compression", "encryption"]
+	const modules = [
+		"auth",
+		"api",
+		"database",
+		"cache",
+		"payment",
+		"user",
+		"admin",
+		"search",
+		"notification",
+		"logging",
+	]
+	const issues = [
+		"null pointer",
+		"race condition",
+		"memory leak",
+		"timeout",
+		"validation error",
+		"encoding issue",
+	]
+	const features = [
+		"caching",
+		"retry logic",
+		"batch processing",
+		"rate limiting",
+		"compression",
+		"encryption",
+	]
 
 	const template = templates[type][seed % templates[type].length]
 
@@ -61,13 +89,19 @@ function generateMemoryContent(seed: number, type: "short" | "medium" | "long"):
 		.replace(/{module}/g, modules[seed % modules.length] ?? "module")
 		.replace(/{issue}/g, issues[seed % issues.length] ?? "issue")
 		.replace(/{feature}/g, features[seed % features.length] ?? "feature")
-		.replace(/{component}/g, modules[(seed + 1) % modules.length] ?? "component")
+		.replace(
+			/{component}/g,
+			modules[(seed + 1) % modules.length] ?? "component"
+		)
 		.replace(/{effect}/g, "unexpected behavior")
 		.replace(/{benefit}/g, "performance and reliability")
 		.replace(/{pattern}/g, "dependency injection")
 		.replace(/{old}/g, "singleton pattern")
 		.replace(/{input}/g, "large payloads")
-		.replace(/{root_cause}/g, "the buffer was not being cleared between requests")
+		.replace(
+			/{root_cause}/g,
+			"the buffer was not being cleared between requests"
+		)
 		.replace(/{solution}/g, "implementing proper cleanup in the finally block")
 		.replace(/{affected}/g, "all downstream consumers")
 		.replace(/{testing}/g, "regression testing")
@@ -118,7 +152,11 @@ function makeEmbedding(seed: number, dim = 384): number[] {
 	return emb.map((x) => x / norm)
 }
 
-function makeSimilarEmbedding(base: number[], similarity: number, seed: number): number[] {
+function makeSimilarEmbedding(
+	base: number[],
+	similarity: number,
+	seed: number
+): number[] {
 	const rand = seededRandom(seed)
 	const noise = Array.from({ length: base.length }, () => rand() * 2 - 1)
 	const noiseNorm = Math.sqrt(noise.reduce((sum, x) => sum + x * x, 0))
@@ -163,8 +201,8 @@ function retrieveLucidMemory(
 	// Run cognitive retrieval
 	const results = retrieve(
 		query,
-		memories.map(m => m.embedding),
-		memories.map(m => m.accessHistory),
+		memories.map((m) => m.embedding),
+		memories.map((m) => m.accessHistory),
 		memories.map(() => 0.5), // emotional weights
 		memories.map(() => 0.5), // decay rates
 		memories.map(() => 1.0), // wm boosts
@@ -212,7 +250,10 @@ function retrieveClaudeMem(
 	tokenBudget: number
 ): RetrievalResult[] {
 	// Layer 1: Vector search returns top 20 by similarity
-	const similarities = cosineSimilarityBatch(query, memories.map(m => m.embedding))
+	const similarities = cosineSimilarityBatch(
+		query,
+		memories.map((m) => m.embedding)
+	)
 	const indexed = similarities.map((sim, idx) => ({ sim, idx }))
 	indexed.sort((a, b) => b.sim - a.sim)
 	const top20 = indexed.slice(0, 20)
@@ -275,7 +316,10 @@ function retrievePineconeRAG(
 	chunkSize = 256
 ): RetrievalResult[] {
 	// Simulate chunked content (memories are already chunks in this sim)
-	const similarities = cosineSimilarityBatch(query, memories.map(m => m.embedding))
+	const similarities = cosineSimilarityBatch(
+		query,
+		memories.map((m) => m.embedding)
+	)
 	const indexed = similarities.map((sim, idx) => ({ sim, idx }))
 	indexed.sort((a, b) => b.sim - a.sim)
 
@@ -350,14 +394,14 @@ function runBenchmark(
 	for (const strategy of strategies) {
 		const retrieved = strategy.fn(query, memories, tokenBudget)
 		const tokensUsed = retrieved.reduce((sum, r) => sum + r.tokensUsed, 0)
-		const retrievedIds = new Set(retrieved.map(r => r.memoryId))
-		const relevantRetrieved = [...retrievedIds].filter(id => {
-			const idx = memories.findIndex(m => m.id === id)
+		const retrievedIds = new Set(retrieved.map((r) => r.memoryId))
+		const relevantRetrieved = [...retrievedIds].filter((id) => {
+			const idx = memories.findIndex((m) => m.id === id)
 			return idx >= 0 && relevantIndices.has(idx)
 		}).length
 
 		const relevanceSum = retrieved.reduce((sum, r) => {
-			const memory = memories.find(m => m.id === r.memoryId)
+			const memory = memories.find((m) => m.id === r.memoryId)
 			return sum + (memory?.relevance ?? 0)
 		}, 0)
 
@@ -369,9 +413,12 @@ function runBenchmark(
 			memoriesRetrieved: retrieved.length,
 			relevantRetrieved,
 			totalRelevant: relevantIndices.size,
-			precision: retrieved.length > 0 ? relevantRetrieved / retrieved.length : 0,
-			recall: relevantIndices.size > 0 ? relevantRetrieved / relevantIndices.size : 0,
-			tokenEfficiency: tokensUsed > 0 ? (relevantRetrieved / tokensUsed) * 100 : 0,
+			precision:
+				retrieved.length > 0 ? relevantRetrieved / retrieved.length : 0,
+			recall:
+				relevantIndices.size > 0 ? relevantRetrieved / relevantIndices.size : 0,
+			tokenEfficiency:
+				tokensUsed > 0 ? (relevantRetrieved / tokensUsed) * 100 : 0,
 			informationDensity: tokensUsed > 0 ? relevanceSum / tokensUsed : 0,
 		})
 	}
@@ -427,12 +474,24 @@ function createScenario(
 // Main
 // ============================================================================
 
-console.log("╔════════════════════════════════════════════════════════════════════╗")
-console.log("║              Token Efficiency Benchmarks                           ║")
-console.log("║                                                                    ║")
-console.log("║  Comparing lucid-memory vs claude-mem vs Pinecone/RAG            ║")
-console.log("║  at various token budgets.                                        ║")
-console.log("╚════════════════════════════════════════════════════════════════════╝\n")
+console.log(
+	"╔════════════════════════════════════════════════════════════════════╗"
+)
+console.log(
+	"║              Token Efficiency Benchmarks                           ║"
+)
+console.log(
+	"║                                                                    ║"
+)
+console.log(
+	"║  Comparing lucid-memory vs claude-mem vs Pinecone/RAG            ║"
+)
+console.log(
+	"║  at various token budgets.                                        ║"
+)
+console.log(
+	"╚════════════════════════════════════════════════════════════════════╝\n"
+)
 
 const scenarios = [
 	createScenario("small_short", 50, 5, "short"),
@@ -446,29 +505,47 @@ const allResults: BenchmarkResult[] = []
 
 for (const scenario of scenarios) {
 	for (const budget of tokenBudgets) {
-		const results = runBenchmark(scenario.name, scenario.memories, scenario.query, budget)
+		const results = runBenchmark(
+			scenario.name,
+			scenario.memories,
+			scenario.query,
+			budget
+		)
 		allResults.push(...results)
 	}
 }
 
 // Print results by scenario
-console.log("\n═══════════════════════════════════════════════════════════════════════════════════════")
+console.log(
+	"\n═══════════════════════════════════════════════════════════════════════════════════════"
+)
 console.log(" Results by Scenario & Token Budget")
-console.log("═══════════════════════════════════════════════════════════════════════════════════════\n")
+console.log(
+	"═══════════════════════════════════════════════════════════════════════════════════════\n"
+)
 
 for (const scenario of scenarios) {
-	console.log(`\n┌─ ${scenario.name} (${scenario.memories.length} memories, ${scenario.memories.filter(m => m.relevance >= 0.5).length} relevant) ─────────────────────────────────────────────┐`)
-	console.log("│                                                                                           │")
-	console.log("│  Budget │   Strategy    │ Tokens │ Memories │ Relevant │ Precision │  Recall │ Efficiency │")
-	console.log("│─────────┼───────────────┼────────┼──────────┼──────────┼───────────┼─────────┼────────────│")
+	console.log(
+		`\n┌─ ${scenario.name} (${scenario.memories.length} memories, ${scenario.memories.filter((m) => m.relevance >= 0.5).length} relevant) ─────────────────────────────────────────────┐`
+	)
+	console.log(
+		"│                                                                                           │"
+	)
+	console.log(
+		"│  Budget │   Strategy    │ Tokens │ Memories │ Relevant │ Precision │  Recall │ Efficiency │"
+	)
+	console.log(
+		"│─────────┼───────────────┼────────┼──────────┼──────────┼───────────┼─────────┼────────────│"
+	)
 
 	for (const budget of tokenBudgets) {
 		const scenarioResults = allResults.filter(
-			r => r.scenario === scenario.name && r.tokenBudget === budget
+			(r) => r.scenario === scenario.name && r.tokenBudget === budget
 		)
 
 		for (const r of scenarioResults) {
-			const budgetStr = budget === tokenBudgets[0] ? budget.toString().padStart(7) : "       "
+			const budgetStr =
+				budget === tokenBudgets[0] ? budget.toString().padStart(7) : "       "
 			const strategy = r.strategy.padEnd(13)
 			const tokens = r.tokensUsed.toString().padStart(6)
 			const memories = r.memoriesRetrieved.toString().padStart(8)
@@ -477,60 +554,100 @@ for (const scenario of scenarios) {
 			const recall = `${(r.recall * 100).toFixed(0)}%`.padStart(7)
 			const efficiency = `${r.tokenEfficiency.toFixed(2)}`.padStart(10)
 
-			console.log(`│ ${budgetStr} │ ${strategy} │ ${tokens} │ ${memories} │ ${relevant} │ ${precision} │ ${recall} │ ${efficiency} │`)
+			console.log(
+				`│ ${budgetStr} │ ${strategy} │ ${tokens} │ ${memories} │ ${relevant} │ ${precision} │ ${recall} │ ${efficiency} │`
+			)
 		}
 		if (budget !== tokenBudgets[tokenBudgets.length - 1]) {
-			console.log("│         │               │        │          │          │           │         │            │")
+			console.log(
+				"│         │               │        │          │          │           │         │            │"
+			)
 		}
 	}
-	console.log("└─────────────────────────────────────────────────────────────────────────────────────────────┘")
+	console.log(
+		"└─────────────────────────────────────────────────────────────────────────────────────────────┘"
+	)
 }
 
 // Summary statistics
-console.log("\n═══════════════════════════════════════════════════════════════════════════════════════")
+console.log(
+	"\n═══════════════════════════════════════════════════════════════════════════════════════"
+)
 console.log(" Summary Statistics")
-console.log("═══════════════════════════════════════════════════════════════════════════════════════\n")
+console.log(
+	"═══════════════════════════════════════════════════════════════════════════════════════\n"
+)
 
 const strategies = ["lucid-memory", "claude-mem", "pinecone-rag"]
 
 for (const strategy of strategies) {
-	const strategyResults = allResults.filter(r => r.strategy === strategy)
-	const avgPrecision = strategyResults.reduce((sum, r) => sum + r.precision, 0) / strategyResults.length
-	const avgRecall = strategyResults.reduce((sum, r) => sum + r.recall, 0) / strategyResults.length
-	const avgEfficiency = strategyResults.reduce((sum, r) => sum + r.tokenEfficiency, 0) / strategyResults.length
-	const avgTokensUsed = strategyResults.reduce((sum, r) => sum + r.tokensUsed, 0) / strategyResults.length
-	const avgMemories = strategyResults.reduce((sum, r) => sum + r.memoriesRetrieved, 0) / strategyResults.length
+	const strategyResults = allResults.filter((r) => r.strategy === strategy)
+	const avgPrecision =
+		strategyResults.reduce((sum, r) => sum + r.precision, 0) /
+		strategyResults.length
+	const avgRecall =
+		strategyResults.reduce((sum, r) => sum + r.recall, 0) /
+		strategyResults.length
+	const avgEfficiency =
+		strategyResults.reduce((sum, r) => sum + r.tokenEfficiency, 0) /
+		strategyResults.length
+	const avgTokensUsed =
+		strategyResults.reduce((sum, r) => sum + r.tokensUsed, 0) /
+		strategyResults.length
+	const avgMemories =
+		strategyResults.reduce((sum, r) => sum + r.memoriesRetrieved, 0) /
+		strategyResults.length
 
 	console.log(`${strategy}:`)
 	console.log(`  Avg Precision:  ${(avgPrecision * 100).toFixed(1)}%`)
 	console.log(`  Avg Recall:     ${(avgRecall * 100).toFixed(1)}%`)
-	console.log(`  Avg Efficiency: ${avgEfficiency.toFixed(2)} relevant/100 tokens`)
+	console.log(
+		`  Avg Efficiency: ${avgEfficiency.toFixed(2)} relevant/100 tokens`
+	)
 	console.log(`  Avg Tokens:     ${avgTokensUsed.toFixed(0)} tokens`)
 	console.log(`  Avg Memories:   ${avgMemories.toFixed(1)} memories`)
 	console.log("")
 }
 
 // Head-to-head comparison
-console.log("═══════════════════════════════════════════════════════════════════════════════════════")
+console.log(
+	"═══════════════════════════════════════════════════════════════════════════════════════"
+)
 console.log(" Head-to-Head: lucid-memory vs Others")
-console.log("═══════════════════════════════════════════════════════════════════════════════════════\n")
+console.log(
+	"═══════════════════════════════════════════════════════════════════════════════════════\n"
+)
 
-const lucidResults = allResults.filter(r => r.strategy === "lucid-memory")
-const claudeMemResults = allResults.filter(r => r.strategy === "claude-mem")
-const pineconeResults = allResults.filter(r => r.strategy === "pinecone-rag")
+const lucidResults = allResults.filter((r) => r.strategy === "lucid-memory")
+const claudeMemResults = allResults.filter((r) => r.strategy === "claude-mem")
+const pineconeResults = allResults.filter((r) => r.strategy === "pinecone-rag")
 
-const lucidAvgEfficiency = lucidResults.reduce((sum, r) => sum + r.tokenEfficiency, 0) / lucidResults.length
-const claudeMemAvgEfficiency = claudeMemResults.reduce((sum, r) => sum + r.tokenEfficiency, 0) / claudeMemResults.length
-const pineconeAvgEfficiency = pineconeResults.reduce((sum, r) => sum + r.tokenEfficiency, 0) / pineconeResults.length
+const lucidAvgEfficiency =
+	lucidResults.reduce((sum, r) => sum + r.tokenEfficiency, 0) /
+	lucidResults.length
+const claudeMemAvgEfficiency =
+	claudeMemResults.reduce((sum, r) => sum + r.tokenEfficiency, 0) /
+	claudeMemResults.length
+const pineconeAvgEfficiency =
+	pineconeResults.reduce((sum, r) => sum + r.tokenEfficiency, 0) /
+	pineconeResults.length
 
-const lucidAvgRecall = lucidResults.reduce((sum, r) => sum + r.recall, 0) / lucidResults.length
-const claudeMemAvgRecall = claudeMemResults.reduce((sum, r) => sum + r.recall, 0) / claudeMemResults.length
-const pineconeAvgRecall = pineconeResults.reduce((sum, r) => sum + r.recall, 0) / pineconeResults.length
+const lucidAvgRecall =
+	lucidResults.reduce((sum, r) => sum + r.recall, 0) / lucidResults.length
+const claudeMemAvgRecall =
+	claudeMemResults.reduce((sum, r) => sum + r.recall, 0) /
+	claudeMemResults.length
+const pineconeAvgRecall =
+	pineconeResults.reduce((sum, r) => sum + r.recall, 0) / pineconeResults.length
 
 console.log("Token Efficiency (relevant memories per 100 tokens):")
 console.log(`  lucid-memory:  ${lucidAvgEfficiency.toFixed(2)}`)
-console.log(`  claude-mem:    ${claudeMemAvgEfficiency.toFixed(2)} (${((lucidAvgEfficiency / claudeMemAvgEfficiency - 1) * 100).toFixed(0)}% ${lucidAvgEfficiency > claudeMemAvgEfficiency ? "behind" : "ahead"})`)
-console.log(`  pinecone-rag:  ${pineconeAvgEfficiency.toFixed(2)} (${((lucidAvgEfficiency / pineconeAvgEfficiency - 1) * 100).toFixed(0)}% ${lucidAvgEfficiency > pineconeAvgEfficiency ? "behind" : "ahead"})`)
+console.log(
+	`  claude-mem:    ${claudeMemAvgEfficiency.toFixed(2)} (${((lucidAvgEfficiency / claudeMemAvgEfficiency - 1) * 100).toFixed(0)}% ${lucidAvgEfficiency > claudeMemAvgEfficiency ? "behind" : "ahead"})`
+)
+console.log(
+	`  pinecone-rag:  ${pineconeAvgEfficiency.toFixed(2)} (${((lucidAvgEfficiency / pineconeAvgEfficiency - 1) * 100).toFixed(0)}% ${lucidAvgEfficiency > pineconeAvgEfficiency ? "behind" : "ahead"})`
+)
 console.log("")
 
 console.log("Recall (fraction of relevant memories retrieved):")
@@ -540,29 +657,41 @@ console.log(`  pinecone-rag:  ${(pineconeAvgRecall * 100).toFixed(1)}%`)
 console.log("")
 
 // Storage overhead analysis
-console.log("═══════════════════════════════════════════════════════════════════════════════════════")
+console.log(
+	"═══════════════════════════════════════════════════════════════════════════════════════"
+)
 console.log(" Storage Overhead Analysis")
-console.log("═══════════════════════════════════════════════════════════════════════════════════════\n")
+console.log(
+	"═══════════════════════════════════════════════════════════════════════════════════════\n"
+)
 
-const mediumScenario = scenarios.find(s => s.name === "medium_mixed")
+const mediumScenario = scenarios.find((s) => s.name === "medium_mixed")
 if (mediumScenario) {
 	const totalContentTokens = mediumScenario.memories.reduce(
-		(sum, m) => sum + estimateTokens(m.content), 0
+		(sum, m) => sum + estimateTokens(m.content),
+		0
 	)
 	const totalGistTokens = mediumScenario.memories.reduce(
-		(sum, m) => sum + estimateTokens(m.gist), 0
+		(sum, m) => sum + estimateTokens(m.gist),
+		0
 	)
 	const compressionRatio = totalContentTokens / totalGistTokens
 
-	console.log(`Scenario: ${mediumScenario.name} (${mediumScenario.memories.length} memories)`)
+	console.log(
+		`Scenario: ${mediumScenario.name} (${mediumScenario.memories.length} memories)`
+	)
 	console.log(`  Total content tokens: ${totalContentTokens}`)
 	console.log(`  Total gist tokens:    ${totalGistTokens}`)
 	console.log(`  Compression ratio:    ${compressionRatio.toFixed(1)}x`)
-	console.log(`  Token savings:        ${((1 - 1/compressionRatio) * 100).toFixed(0)}%`)
+	console.log(
+		`  Token savings:        ${((1 - 1 / compressionRatio) * 100).toFixed(0)}%`
+	)
 	console.log("")
 	console.log(`  lucid-memory stores gists → ${totalGistTokens} tokens`)
 	console.log(`  claude-mem stores full content → ${totalContentTokens} tokens`)
-	console.log(`  pinecone-rag stores chunks → ${totalContentTokens} tokens (no compression)`)
+	console.log(
+		`  pinecone-rag stores chunks → ${totalContentTokens} tokens (no compression)`
+	)
 }
 
 console.log("\n")

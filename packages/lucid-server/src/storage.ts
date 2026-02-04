@@ -90,6 +90,11 @@ export interface Memory {
 	emotionalWeight: number
 	projectId: string | null
 	tags: string[]
+	// Cognitive feature fields (0.5.0+)
+	encodingStrength: number
+	encodingContext: EncodingContext
+	consolidationState: ConsolidationState
+	lastConsolidated: number | null
 }
 
 export interface MemoryInput {
@@ -106,6 +111,56 @@ export interface Association {
 	targetId: string
 	strength: number
 	type: "semantic" | "temporal" | "causal"
+	lastReinforced: number | null
+	coAccessCount: number
+}
+
+// Consolidation states (aligned with visual.rs ConsolidationState)
+export type ConsolidationState =
+	| "fresh" // Not yet consolidated
+	| "consolidating" // Currently being consolidated (labile)
+	| "consolidated" // Fully consolidated (stable)
+	| "reconsolidating" // After reactivation
+
+// Encoding context stored at memory creation time
+export interface EncodingContext {
+	taskContext?: string
+	activityType?: string
+	locationPath?: string
+	projectId?: string
+	explicitImportance?: boolean
+}
+
+// Episode types for 0.5.0 Episodic Memory
+export type EpisodeBoundaryType = "time_gap" | "context_switch" | "explicit"
+
+export interface Episode {
+	id: string
+	projectId: string | null
+	startedAt: number
+	endedAt: number | null
+	boundaryType: EpisodeBoundaryType
+	encodingContext: EncodingContext
+	encodingStrength: number
+	createdAt: number
+}
+
+export interface EpisodeEvent {
+	id: string
+	episodeId: string
+	memoryId: string
+	position: number
+	createdAt: number
+}
+
+export interface EpisodeTemporalLink {
+	id: string
+	episodeId: string
+	sourceEventId: string
+	targetEventId: string
+	strength: number
+	direction: "forward" | "backward"
+	createdAt: number
 }
 
 export interface Project {
@@ -481,7 +536,105 @@ export class LucidStorage {
 
       CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(last_active_at);
+
+      -- Episodes for temporal sequence tracking (0.5.0 Episodic Memory)
+      -- Episodes group memories into coherent temporal sequences.
+      CREATE TABLE IF NOT EXISTS episodes (
+        id TEXT PRIMARY KEY,
+        project_id TEXT,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        boundary_type TEXT DEFAULT 'time_gap',
+        encoding_context TEXT DEFAULT '{}',
+        encoding_strength REAL DEFAULT 0.5,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_episodes_project ON episodes(project_id);
+      CREATE INDEX IF NOT EXISTS idx_episodes_started ON episodes(started_at DESC);
+
+      -- Episode Events link memories to episodes with position ordering
+      CREATE TABLE IF NOT EXISTS episode_events (
+        id TEXT PRIMARY KEY,
+        episode_id TEXT NOT NULL,
+        memory_id TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
+        FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_episode_events_episode ON episode_events(episode_id);
+      CREATE INDEX IF NOT EXISTS idx_episode_events_memory ON episode_events(memory_id);
+
+      -- Temporal links between events within an episode
+      CREATE TABLE IF NOT EXISTS episode_temporal_links (
+        id TEXT PRIMARY KEY,
+        episode_id TEXT NOT NULL,
+        source_event_id TEXT NOT NULL,
+        target_event_id TEXT NOT NULL,
+        strength REAL DEFAULT 0.5,
+        direction TEXT DEFAULT 'forward',
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
+        FOREIGN KEY (source_event_id) REFERENCES episode_events(id) ON DELETE CASCADE,
+        FOREIGN KEY (target_event_id) REFERENCES episode_events(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_episode_links_episode ON episode_temporal_links(episode_id);
+      CREATE INDEX IF NOT EXISTS idx_episode_links_source ON episode_temporal_links(source_event_id);
     `)
+
+		this.runMigrations()
+	}
+
+	private runMigrations(): void {
+		// Migration: Add cognitive feature columns to memories table
+		// Using ALTER TABLE ADD COLUMN with defaults for backward compatibility
+		const memoryColumns = this.db
+			.prepare(
+				"SELECT name FROM pragma_table_info('memories') WHERE name IN ('encoding_strength', 'encoding_context', 'consolidation_state', 'last_consolidated')"
+			)
+			.all() as { name: string }[]
+		const existingMemoryCols = new Set(memoryColumns.map((c) => c.name))
+
+		if (!existingMemoryCols.has("encoding_strength")) {
+			this.db.exec(
+				"ALTER TABLE memories ADD COLUMN encoding_strength REAL DEFAULT 0.5"
+			)
+		}
+		if (!existingMemoryCols.has("encoding_context")) {
+			this.db.exec(
+				"ALTER TABLE memories ADD COLUMN encoding_context TEXT DEFAULT '{}'"
+			)
+		}
+		if (!existingMemoryCols.has("consolidation_state")) {
+			this.db.exec(
+				"ALTER TABLE memories ADD COLUMN consolidation_state TEXT DEFAULT 'fresh'"
+			)
+		}
+		if (!existingMemoryCols.has("last_consolidated")) {
+			this.db.exec("ALTER TABLE memories ADD COLUMN last_consolidated INTEGER")
+		}
+
+		// Migration: Add cognitive feature columns to associations table
+		const assocColumns = this.db
+			.prepare(
+				"SELECT name FROM pragma_table_info('associations') WHERE name IN ('last_reinforced', 'co_access_count')"
+			)
+			.all() as { name: string }[]
+		const existingAssocCols = new Set(assocColumns.map((c) => c.name))
+
+		if (!existingAssocCols.has("last_reinforced")) {
+			this.db.exec(
+				"ALTER TABLE associations ADD COLUMN last_reinforced INTEGER"
+			)
+		}
+		if (!existingAssocCols.has("co_access_count")) {
+			this.db.exec(
+				"ALTER TABLE associations ADD COLUMN co_access_count INTEGER DEFAULT 1"
+			)
+		}
 	}
 
 	// ============================================================================
@@ -786,13 +939,18 @@ export class LucidStorage {
 		strength: number,
 		type: Association["type"] = "semantic"
 	): void {
+		const now = Date.now()
 		this.db
 			.prepare(`
-      INSERT INTO associations (source_id, target_id, strength, type)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT (source_id, target_id) DO UPDATE SET strength = ?, type = ?
+      INSERT INTO associations (source_id, target_id, strength, type, last_reinforced, co_access_count)
+      VALUES (?, ?, ?, ?, ?, 1)
+      ON CONFLICT (source_id, target_id) DO UPDATE SET
+        strength = ?,
+        type = ?,
+        last_reinforced = ?,
+        co_access_count = co_access_count + 1
     `)
-			.run(sourceId, targetId, strength, type, strength, type)
+			.run(sourceId, targetId, strength, type, now, strength, type, now)
 	}
 
 	/**
@@ -810,6 +968,8 @@ export class LucidStorage {
 			targetId: r.target_id,
 			strength: r.strength,
 			type: isAssociationType(r.type) ? r.type : "semantic",
+			lastReinforced: r.last_reinforced ?? null,
+			coAccessCount: r.co_access_count ?? 1,
 		}))
 	}
 
@@ -826,6 +986,8 @@ export class LucidStorage {
 			targetId: r.target_id,
 			strength: r.strength,
 			type: isAssociationType(r.type) ? r.type : "semantic",
+			lastReinforced: r.last_reinforced ?? null,
+			coAccessCount: r.co_access_count ?? 1,
 		}))
 	}
 
@@ -843,6 +1005,233 @@ export class LucidStorage {
 		} catch (error) {
 			console.error("[lucid] Failed to dissociate:", error)
 			return false
+		}
+	}
+
+	// ============================================================================
+	// Episodes (0.5.0 Episodic Memory)
+	// ============================================================================
+
+	/**
+	 * Create a new episode.
+	 */
+	createEpisode(input: {
+		projectId?: string
+		boundaryType?: EpisodeBoundaryType
+		encodingContext?: EncodingContext
+		encodingStrength?: number
+	}): Episode {
+		const id = randomUUID()
+		const now = Date.now()
+
+		this.db
+			.prepare(`
+				INSERT INTO episodes (id, project_id, started_at, boundary_type, encoding_context, encoding_strength, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?)
+			`)
+			.run(
+				id,
+				input.projectId ?? null,
+				now,
+				input.boundaryType ?? "time_gap",
+				JSON.stringify(input.encodingContext ?? {}),
+				input.encodingStrength ?? 0.5,
+				now
+			)
+
+		return {
+			id,
+			projectId: input.projectId ?? null,
+			startedAt: now,
+			endedAt: null,
+			boundaryType: input.boundaryType ?? "time_gap",
+			encodingContext: input.encodingContext ?? {},
+			encodingStrength: input.encodingStrength ?? 0.5,
+			createdAt: now,
+		}
+	}
+
+	/**
+	 * Get an episode by ID.
+	 */
+	getEpisode(id: string): Episode | null {
+		const row = this.db
+			.prepare(`SELECT * FROM episodes WHERE id = ?`)
+			.get(id) as EpisodeRow | null
+
+		return row ? this.rowToEpisode(row) : null
+	}
+
+	/**
+	 * End an episode (set ended_at timestamp).
+	 */
+	endEpisode(id: string): boolean {
+		const result = this.db
+			.prepare(`UPDATE episodes SET ended_at = ? WHERE id = ?`)
+			.run(Date.now(), id)
+		return result.changes > 0
+	}
+
+	/**
+	 * Get recent episodes for a project.
+	 */
+	getRecentEpisodes(projectId?: string, limit = 10): Episode[] {
+		const rows = projectId
+			? (this.db
+					.prepare(
+						`SELECT * FROM episodes WHERE project_id = ? ORDER BY started_at DESC LIMIT ?`
+					)
+					.all(projectId, limit) as EpisodeRow[])
+			: (this.db
+					.prepare(`SELECT * FROM episodes ORDER BY started_at DESC LIMIT ?`)
+					.all(limit) as EpisodeRow[])
+
+		return rows.map((r) => this.rowToEpisode(r))
+	}
+
+	/**
+	 * Get the current (most recent open) episode for a project.
+	 */
+	getCurrentEpisode(projectId?: string): Episode | null {
+		const row = projectId
+			? (this.db
+					.prepare(
+						`SELECT * FROM episodes WHERE project_id = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1`
+					)
+					.get(projectId) as EpisodeRow | null)
+			: (this.db
+					.prepare(
+						`SELECT * FROM episodes WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1`
+					)
+					.get() as EpisodeRow | null)
+
+		return row ? this.rowToEpisode(row) : null
+	}
+
+	/**
+	 * Add a memory to an episode as an event.
+	 * @throws Error if episodeId or memoryId don't exist (foreign key constraint)
+	 */
+	addEventToEpisode(episodeId: string, memoryId: string): EpisodeEvent | null {
+		try {
+			const id = randomUUID()
+			const now = Date.now()
+
+			// Get next position (wrapped in transaction with insert for atomicity)
+			const lastEvent = this.db
+				.prepare(
+					`SELECT position FROM episode_events WHERE episode_id = ? ORDER BY position DESC LIMIT 1`
+				)
+				.get(episodeId) as { position: number } | null
+			const position = (lastEvent?.position ?? -1) + 1
+
+			this.db
+				.prepare(`
+					INSERT INTO episode_events (id, episode_id, memory_id, position, created_at)
+					VALUES (?, ?, ?, ?, ?)
+				`)
+				.run(id, episodeId, memoryId, position, now)
+
+			return { id, episodeId, memoryId, position, createdAt: now }
+		} catch (error) {
+			console.error("[lucid] Failed to add event to episode:", error)
+			return null
+		}
+	}
+
+	/**
+	 * Get all events in an episode, ordered by position.
+	 */
+	getEpisodeEvents(episodeId: string): EpisodeEvent[] {
+		const rows = this.db
+			.prepare(
+				`SELECT * FROM episode_events WHERE episode_id = ? ORDER BY position`
+			)
+			.all(episodeId) as EpisodeEventRow[]
+
+		return rows.map((r) => ({
+			id: r.id,
+			episodeId: r.episode_id,
+			memoryId: r.memory_id,
+			position: r.position,
+			createdAt: r.created_at,
+		}))
+	}
+
+	/**
+	 * Create a temporal link between two events in an episode.
+	 * @throws Error if episodeId or eventIds don't exist (foreign key constraint)
+	 */
+	createTemporalLink(input: {
+		episodeId: string
+		sourceEventId: string
+		targetEventId: string
+		strength?: number
+		direction?: "forward" | "backward"
+	}): EpisodeTemporalLink | null {
+		try {
+			const id = randomUUID()
+			const now = Date.now()
+
+			this.db
+				.prepare(`
+					INSERT INTO episode_temporal_links (id, episode_id, source_event_id, target_event_id, strength, direction, created_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?)
+				`)
+				.run(
+					id,
+					input.episodeId,
+					input.sourceEventId,
+					input.targetEventId,
+					input.strength ?? 0.5,
+					input.direction ?? "forward",
+					now
+				)
+
+			return {
+				id,
+				episodeId: input.episodeId,
+				sourceEventId: input.sourceEventId,
+				targetEventId: input.targetEventId,
+				strength: input.strength ?? 0.5,
+				direction: input.direction ?? "forward",
+				createdAt: now,
+			}
+		} catch (error) {
+			console.error("[lucid] Failed to create temporal link:", error)
+			return null
+		}
+	}
+
+	/**
+	 * Get all temporal links for an episode.
+	 */
+	getEpisodeTemporalLinks(episodeId: string): EpisodeTemporalLink[] {
+		const rows = this.db
+			.prepare(`SELECT * FROM episode_temporal_links WHERE episode_id = ?`)
+			.all(episodeId) as EpisodeTemporalLinkRow[]
+
+		return rows.map((r) => ({
+			id: r.id,
+			episodeId: r.episode_id,
+			sourceEventId: r.source_event_id,
+			targetEventId: r.target_event_id,
+			strength: r.strength,
+			direction: r.direction as "forward" | "backward",
+			createdAt: r.created_at,
+		}))
+	}
+
+	private rowToEpisode(row: EpisodeRow): Episode {
+		return {
+			id: row.id,
+			projectId: row.project_id,
+			startedAt: row.started_at,
+			endedAt: row.ended_at,
+			boundaryType: row.boundary_type as EpisodeBoundaryType,
+			encodingContext: safeJsonParse<EncodingContext>(row.encoding_context, {}),
+			encodingStrength: row.encoding_strength,
+			createdAt: row.created_at,
 		}
 	}
 
@@ -2566,6 +2955,12 @@ export class LucidStorage {
 			emotionalWeight: row.emotional_weight,
 			projectId: row.project_id,
 			tags: safeJsonParse<string[]>(row.tags, []),
+			// Cognitive feature fields (0.5.0+)
+			encodingStrength: row.encoding_strength ?? 0.5,
+			encodingContext: safeJsonParse<EncodingContext>(row.encoding_context, {}),
+			consolidationState: (row.consolidation_state ??
+				"fresh") as ConsolidationState,
+			lastConsolidated: row.last_consolidated,
 		}
 	}
 
@@ -2592,6 +2987,11 @@ interface MemoryRow {
 	emotional_weight: number
 	project_id: string | null
 	tags: string
+	// Cognitive feature columns (0.5.0+)
+	encoding_strength: number
+	encoding_context: string
+	consolidation_state: string
+	last_consolidated: number | null
 }
 
 interface AssociationRow {
@@ -2599,6 +2999,9 @@ interface AssociationRow {
 	target_id: string
 	strength: number
 	type: string
+	// Cognitive feature columns (0.5.0+)
+	last_reinforced: number | null
+	co_access_count: number
 }
 
 interface ProjectRow {
@@ -2653,4 +3056,34 @@ interface VisualMemoryRow {
 	access_count: number
 	created_at: number
 	project_id: string | null
+}
+
+// Episode row types (0.5.0 Episodic Memory)
+interface EpisodeRow {
+	id: string
+	project_id: string | null
+	started_at: number
+	ended_at: number | null
+	boundary_type: string
+	encoding_context: string
+	encoding_strength: number
+	created_at: number
+}
+
+interface EpisodeEventRow {
+	id: string
+	episode_id: string
+	memory_id: string
+	position: number
+	created_at: number
+}
+
+interface EpisodeTemporalLinkRow {
+	id: string
+	episode_id: string
+	source_event_id: string
+	target_event_id: string
+	strength: number
+	direction: string
+	created_at: number
 }

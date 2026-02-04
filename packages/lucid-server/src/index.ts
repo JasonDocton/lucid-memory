@@ -5,6 +5,23 @@
  * Install once, Claude Code remembers forever.
  */
 
+export type { CognitiveConfigType } from "./config.ts"
+// Configuration
+export {
+	ActivationConfig,
+	AssociationDecayConfig,
+	CognitiveConfig,
+	ConsolidationConfig,
+	EmotionalDecayConfig,
+	EncodingSpecificityConfig,
+	EpisodicMemoryConfig,
+	getEnabledFeatures,
+	InstanceNoiseConfig,
+	isFeatureEnabled,
+	PartialMatchingConfig,
+	SessionConfig,
+	WorkingMemoryConfig,
+} from "./config.ts"
 export type {
 	EmbeddingConfig,
 	EmbeddingProvider,
@@ -22,6 +39,12 @@ export type { RetrievalCandidate, RetrievalConfig } from "./retrieval.ts"
 export { DEFAULT_CONFIG, LucidRetrieval } from "./retrieval.ts"
 export type {
 	Association,
+	ConsolidationState,
+	EncodingContext,
+	Episode,
+	EpisodeBoundaryType,
+	EpisodeEvent,
+	EpisodeTemporalLink,
 	Memory,
 	MemoryInput,
 	MemoryType,

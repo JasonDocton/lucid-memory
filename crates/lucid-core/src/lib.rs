@@ -118,25 +118,47 @@ pub mod spreading;
 pub mod visual;
 
 pub use activation::{
-	combine_activations, compute_base_level, cosine_similarity, nonlinear_activation,
-	retrieval_probability, ActivationBreakdown, ActivationConfig,
-	// Working Memory
-	compute_working_memory_boost, compute_working_memory_boost_batch, WorkingMemoryConfig,
-	// Session Decay
-	compute_session_decay_rate, compute_session_decay_rate_batch,
-	// Instance Noise
-	compute_encoding_strength, compute_instance_noise, InstanceNoiseConfig,
+	combine_activations,
 	// Association Decay
-	compute_association_decay, get_decay_tau, reinforce_association, should_prune_association,
-	AssociationDecayConfig, AssociationState,
+	compute_association_decay,
+	compute_base_level,
+	// Instance Noise
+	compute_encoding_strength,
+	compute_instance_noise,
+	// Session Decay
+	compute_session_decay_rate,
+	compute_session_decay_rate_batch,
+	// Working Memory
+	compute_working_memory_boost,
+	compute_working_memory_boost_batch,
+	cosine_similarity,
+	get_decay_tau,
+	nonlinear_activation,
+	reinforce_association,
+	retrieval_probability,
+	should_prune_association,
+	ActivationBreakdown,
+	ActivationConfig,
+	AssociationDecayConfig,
+	AssociationState,
+	InstanceNoiseConfig,
+	WorkingMemoryConfig,
 };
 pub use retrieval::{retrieve, RetrievalCandidate, RetrievalConfig, RetrievalInput};
 pub use spreading::{
-	spread_activation, Association, SpreadingConfig, SpreadingResult,
 	// Temporal Spreading (Episodic Memory)
-	compute_temporal_link_strength, create_episode_links, find_temporal_neighbors,
-	spread_temporal_activation, spread_temporal_activation_multi,
-	TemporalLink, TemporalSpreadingConfig, TemporalSpreadingResult,
+	compute_temporal_link_strength,
+	create_episode_links,
+	find_temporal_neighbors,
+	spread_activation,
+	spread_temporal_activation,
+	spread_temporal_activation_multi,
+	Association,
+	SpreadingConfig,
+	SpreadingResult,
+	TemporalLink,
+	TemporalSpreadingConfig,
+	TemporalSpreadingResult,
 };
 
 // Location Intuitions (spatial memory)

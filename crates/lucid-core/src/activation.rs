@@ -414,10 +414,7 @@ pub fn compute_session_decay_rate(last_access_ms: f64, current_time_ms: f64) -> 
 
 /// Batch compute session-aware decay rates.
 #[must_use]
-pub fn compute_session_decay_rate_batch(
-	last_access_ms: &[f64],
-	current_time_ms: f64,
-) -> Vec<f64> {
+pub fn compute_session_decay_rate_batch(last_access_ms: &[f64], current_time_ms: f64) -> Vec<f64> {
 	last_access_ms
 		.iter()
 		.map(|&t| compute_session_decay_rate(t, current_time_ms))
@@ -482,8 +479,12 @@ pub fn compute_encoding_strength(
 		0.0
 	};
 
-	(config.emotional_weight.mul_add(emotional_weight, config.attention_weight.mul_add(attention, config.encoding_base))
-		+ rehearsal_contribution)
+	(config.emotional_weight.mul_add(
+		emotional_weight,
+		config
+			.attention_weight
+			.mul_add(attention, config.encoding_base),
+	) + rehearsal_contribution)
 		.clamp(0.0, 1.0)
 }
 
@@ -538,10 +539,10 @@ pub struct AssociationDecayConfig {
 impl Default for AssociationDecayConfig {
 	fn default() -> Self {
 		Self {
-			tau_fresh_days: 1.0 / 24.0,       // 1 hour
-			tau_consolidating_days: 1.0,       // 1 day
-			tau_consolidated_days: 30.0,       // 30 days
-			tau_reconsolidating_days: 7.0,     // 7 days
+			tau_fresh_days: 1.0 / 24.0,    // 1 hour
+			tau_consolidating_days: 1.0,   // 1 day
+			tau_consolidated_days: 30.0,   // 30 days
+			tau_reconsolidating_days: 7.0, // 7 days
 			reinforcement_boost: 0.05,
 			prune_threshold: 0.1,
 		}
@@ -733,7 +734,8 @@ mod tests {
 	fn test_association_decay_consolidated() {
 		let config = AssociationDecayConfig::default();
 		// Consolidated association after 30 days (= 1 tau)
-		let strength = compute_association_decay(1.0, 30.0, AssociationState::Consolidated, &config);
+		let strength =
+			compute_association_decay(1.0, 30.0, AssociationState::Consolidated, &config);
 		// Should decay to ~0.37 (e^-1)
 		assert!((strength - 0.368).abs() < 0.01);
 	}

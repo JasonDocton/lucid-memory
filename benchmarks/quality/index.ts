@@ -9,37 +9,37 @@
  */
 
 import {
-	retrieve,
 	cosineSimilarityBatch,
 	type JsAssociation,
 	type JsRetrievalCandidate,
-} from "../../packages/lucid-native/index.js";
+	retrieve,
+} from "../../packages/lucid-native/index.js"
 
-const VERBOSE = process.argv.includes("--verbose");
+const VERBOSE = process.argv.includes("--verbose")
 
 // Synthetic embeddings - we use simple vectors where similarity is controllable
 function makeEmbedding(pattern: number[], dim = 128): number[] {
-	const emb = new Array(dim).fill(0);
+	const emb = new Array(dim).fill(0)
 	for (let i = 0; i < pattern.length && i < dim; i++) {
-		emb[i] = pattern[i];
+		emb[i] = pattern[i]
 	}
 	// Normalize
-	const norm = Math.sqrt(emb.reduce((sum, x) => sum + x * x, 0));
-	return norm > 0 ? emb.map((x) => x / norm) : emb;
+	const norm = Math.sqrt(emb.reduce((sum, x) => sum + x * x, 0))
+	return norm > 0 ? emb.map((x) => x / norm) : emb
 }
 
 interface TestCase {
-	name: string;
-	description: string;
-	probe: number[];
+	name: string
+	description: string
+	probe: number[]
 	memories: {
-		embedding: number[];
-		accessHistory: number[]; // timestamps in ms
-		emotionalWeight: number;
-		expectedRank: number; // 1 = should be first
-	}[];
-	associations?: JsAssociation[];
-	currentTime: number;
+		embedding: number[]
+		accessHistory: number[] // timestamps in ms
+		emotionalWeight: number
+		expectedRank: number // 1 = should be first
+	}[]
+	associations?: JsAssociation[]
+	currentTime: number
 }
 
 // Test cases designed to show where cognitive retrieval should outperform naive
@@ -194,59 +194,62 @@ const testCases: TestCase[] = [
 			},
 		],
 	},
-];
+]
 
 // Metrics
 
 function computeNDCG(
 	actualRanking: number[],
 	expectedRanking: number[],
-	k: number,
+	k: number
 ): number {
 	// DCG = Σ (2^rel_i - 1) / log2(i + 2)
 	// where rel_i is the relevance score at position i
 
 	// Build relevance scores: expectedRank 1 = highest relevance
-	const maxRank = Math.max(...expectedRanking);
+	const maxRank = Math.max(...expectedRanking)
 	const relevance = actualRanking.map((idx) => {
-		const expected = expectedRanking[idx];
-		return maxRank - expected + 1; // higher = more relevant
-	});
+		const expected = expectedRanking[idx]
+		return maxRank - expected + 1 // higher = more relevant
+	})
 
 	const dcg = relevance.slice(0, k).reduce((sum, rel, i) => {
-		return sum + (Math.pow(2, rel) - 1) / Math.log2(i + 2);
-	}, 0);
+		return sum + (2 ** rel - 1) / Math.log2(i + 2)
+	}, 0)
 
 	// Ideal DCG: sort by relevance descending
-	const idealRelevance = [...relevance].sort((a, b) => b - a);
+	const idealRelevance = [...relevance].sort((a, b) => b - a)
 	const idcg = idealRelevance.slice(0, k).reduce((sum, rel, i) => {
-		return sum + (Math.pow(2, rel) - 1) / Math.log2(i + 2);
-	}, 0);
+		return sum + (2 ** rel - 1) / Math.log2(i + 2)
+	}, 0)
 
-	return idcg > 0 ? dcg / idcg : 0;
+	return idcg > 0 ? dcg / idcg : 0
 }
 
-function computeMRR(actualRanking: number[], expectedRanking: number[]): number {
+function computeMRR(
+	actualRanking: number[],
+	expectedRanking: number[]
+): number {
 	// Find the rank of the first relevant item (expected rank 1)
-	const bestExpectedIdx = expectedRanking.indexOf(1);
-	const positionInActual = actualRanking.indexOf(bestExpectedIdx);
-	return positionInActual >= 0 ? 1 / (positionInActual + 1) : 0;
+	const bestExpectedIdx = expectedRanking.indexOf(1)
+	const positionInActual = actualRanking.indexOf(bestExpectedIdx)
+	return positionInActual >= 0 ? 1 / (positionInActual + 1) : 0
 }
 
 function computePrecisionAtK(
 	actualRanking: number[],
 	expectedRanking: number[],
-	k: number,
+	k: number
 ): number {
 	// How many of the top-k actual results are in the top-k expected?
 	const topKExpected = expectedRanking
 		.map((rank, idx) => ({ rank, idx }))
 		.filter((x) => x.rank <= k)
-		.map((x) => x.idx);
+		.map((x) => x.idx)
 
-	const topKActual = actualRanking.slice(0, k);
-	const hits = topKActual.filter((idx) => topKExpected.includes(idx)).length;
-	return hits / k;
+	const topKActual = actualRanking.slice(0, k)
+	const hits = topKActual.filter((idx) => topKExpected.includes(idx)).length
+	return hits / k
 }
 
 // Retrieval functions
@@ -254,12 +257,12 @@ function computePrecisionAtK(
 function naiveRetrieve(
 	probe: number[],
 	embeddings: number[][],
-	k: number,
+	k: number
 ): number[] {
-	const similarities = cosineSimilarityBatch(probe, embeddings);
-	const indexed = similarities.map((sim, idx) => ({ sim, idx }));
-	indexed.sort((a, b) => b.sim - a.sim);
-	return indexed.slice(0, k).map((x) => x.idx);
+	const similarities = cosineSimilarityBatch(probe, embeddings)
+	const indexed = similarities.map((sim, idx) => ({ sim, idx }))
+	indexed.sort((a, b) => b.sim - a.sim)
+	return indexed.slice(0, k).map((x) => x.idx)
 }
 
 function cognitiveRetrieve(
@@ -267,13 +270,13 @@ function cognitiveRetrieve(
 	memories: TestCase["memories"],
 	associations: JsAssociation[] | undefined,
 	currentTime: number,
-	k: number,
+	k: number
 ): number[] {
-	const embeddings = memories.map((m) => m.embedding);
-	const accessHistories = memories.map((m) => m.accessHistory);
-	const emotionalWeights = memories.map((m) => m.emotionalWeight);
-	const decayRates = memories.map(() => 0.5);
-	const wmBoosts = memories.map(() => 1.0);
+	const embeddings = memories.map((m) => m.embedding)
+	const accessHistories = memories.map((m) => m.accessHistory)
+	const emotionalWeights = memories.map((m) => m.emotionalWeight)
+	const decayRates = memories.map(() => 0.5)
+	const wmBoosts = memories.map(() => 1.0)
 
 	const results = retrieve(
 		probe,
@@ -284,28 +287,28 @@ function cognitiveRetrieve(
 		wmBoosts,
 		currentTime,
 		associations ?? null,
-		{ minProbability: 0, maxResults: k },
-	);
+		{ minProbability: 0, maxResults: k }
+	)
 
-	return results.map((r) => r.index);
+	return results.map((r) => r.index)
 }
 
 // Run benchmarks
 
 interface BenchmarkResult {
-	testCase: string;
-	naive: { ndcg: number; mrr: number; precision: number };
-	cognitive: { ndcg: number; mrr: number; precision: number };
-	winner: "naive" | "cognitive" | "tie";
+	testCase: string
+	naive: { ndcg: number; mrr: number; precision: number }
+	cognitive: { ndcg: number; mrr: number; precision: number }
+	winner: "naive" | "cognitive" | "tie"
 }
 
 function runBenchmark(testCase: TestCase): BenchmarkResult {
-	const k = Math.min(testCase.memories.length, 5);
-	const expectedRanking = testCase.memories.map((m) => m.expectedRank);
-	const embeddings = testCase.memories.map((m) => m.embedding);
+	const k = Math.min(testCase.memories.length, 5)
+	const expectedRanking = testCase.memories.map((m) => m.expectedRank)
+	const embeddings = testCase.memories.map((m) => m.embedding)
 
 	// Naive retrieval
-	const naiveRanking = naiveRetrieve(testCase.probe, embeddings, k);
+	const naiveRanking = naiveRetrieve(testCase.probe, embeddings, k)
 
 	// Cognitive retrieval
 	const cognitiveRanking = cognitiveRetrieve(
@@ -313,37 +316,39 @@ function runBenchmark(testCase: TestCase): BenchmarkResult {
 		testCase.memories,
 		testCase.associations,
 		testCase.currentTime,
-		k,
-	);
+		k
+	)
 
 	const naiveMetrics = {
 		ndcg: computeNDCG(naiveRanking, expectedRanking, k),
 		mrr: computeMRR(naiveRanking, expectedRanking),
 		precision: computePrecisionAtK(naiveRanking, expectedRanking, k),
-	};
+	}
 
 	const cognitiveMetrics = {
 		ndcg: computeNDCG(cognitiveRanking, expectedRanking, k),
 		mrr: computeMRR(cognitiveRanking, expectedRanking),
 		precision: computePrecisionAtK(cognitiveRanking, expectedRanking, k),
-	};
+	}
 
 	// Winner based on NDCG (primary metric)
-	let winner: "naive" | "cognitive" | "tie";
+	let winner: "naive" | "cognitive" | "tie"
 	if (Math.abs(cognitiveMetrics.ndcg - naiveMetrics.ndcg) < 0.01) {
-		winner = "tie";
+		winner = "tie"
 	} else if (cognitiveMetrics.ndcg > naiveMetrics.ndcg) {
-		winner = "cognitive";
+		winner = "cognitive"
 	} else {
-		winner = "naive";
+		winner = "naive"
 	}
 
 	if (VERBOSE) {
-		console.log(`\n  ${testCase.name}:`);
-		console.log(`    ${testCase.description}`);
-		console.log(`    Naive ranking:     [${naiveRanking.join(", ")}]`);
-		console.log(`    Cognitive ranking: [${cognitiveRanking.join(", ")}]`);
-		console.log(`    Expected ranking:  [${expectedRanking.map((_, i) => expectedRanking.indexOf(i + 1) === -1 ? "?" : expectedRanking.indexOf(i + 1)).join(", ")}]`);
+		console.log(`\n  ${testCase.name}:`)
+		console.log(`    ${testCase.description}`)
+		console.log(`    Naive ranking:     [${naiveRanking.join(", ")}]`)
+		console.log(`    Cognitive ranking: [${cognitiveRanking.join(", ")}]`)
+		console.log(
+			`    Expected ranking:  [${expectedRanking.map((_, i) => (expectedRanking.indexOf(i + 1) === -1 ? "?" : expectedRanking.indexOf(i + 1))).join(", ")}]`
+		)
 	}
 
 	return {
@@ -351,64 +356,70 @@ function runBenchmark(testCase: TestCase): BenchmarkResult {
 		naive: naiveMetrics,
 		cognitive: cognitiveMetrics,
 		winner,
-	};
+	}
 }
 
 // Main
 
-console.log("Quality Benchmark: Naive vs Cognitive Retrieval");
-console.log("================================================\n");
+console.log("Quality Benchmark: Naive vs Cognitive Retrieval")
+console.log("================================================\n")
 
-const results = testCases.map(runBenchmark);
+const results = testCases.map(runBenchmark)
 
-console.log("\nResults:");
-console.log("--------");
+console.log("\nResults:")
+console.log("--------")
+console.log("Test Case                  | Naive NDCG | Cognitive NDCG | Winner")
 console.log(
-	"Test Case                  | Naive NDCG | Cognitive NDCG | Winner",
-);
-console.log(
-	"---------------------------|------------|----------------|----------",
-);
+	"---------------------------|------------|----------------|----------"
+)
 
 for (const r of results) {
-	const name = r.testCase.padEnd(26);
-	const naiveNdcg = r.naive.ndcg.toFixed(3).padStart(10);
-	const cogNdcg = r.cognitive.ndcg.toFixed(3).padStart(14);
-	const winner = r.winner.padStart(10);
-	console.log(`${name} |${naiveNdcg} |${cogNdcg} |${winner}`);
+	const name = r.testCase.padEnd(26)
+	const naiveNdcg = r.naive.ndcg.toFixed(3).padStart(10)
+	const cogNdcg = r.cognitive.ndcg.toFixed(3).padStart(14)
+	const winner = r.winner.padStart(10)
+	console.log(`${name} |${naiveNdcg} |${cogNdcg} |${winner}`)
 }
 
 // Summary
-const cognitiveWins = results.filter((r) => r.winner === "cognitive").length;
-const naiveWins = results.filter((r) => r.winner === "naive").length;
-const ties = results.filter((r) => r.winner === "tie").length;
+const cognitiveWins = results.filter((r) => r.winner === "cognitive").length
+const naiveWins = results.filter((r) => r.winner === "naive").length
+const ties = results.filter((r) => r.winner === "tie").length
 
-console.log("\nSummary:");
-console.log(`  Cognitive wins: ${cognitiveWins}/${results.length}`);
-console.log(`  Naive wins:     ${naiveWins}/${results.length}`);
-console.log(`  Ties:           ${ties}/${results.length}`);
+console.log("\nSummary:")
+console.log(`  Cognitive wins: ${cognitiveWins}/${results.length}`)
+console.log(`  Naive wins:     ${naiveWins}/${results.length}`)
+console.log(`  Ties:           ${ties}/${results.length}`)
 
 // Average metrics
 const avgNaive = {
 	ndcg: results.reduce((sum, r) => sum + r.naive.ndcg, 0) / results.length,
 	mrr: results.reduce((sum, r) => sum + r.naive.mrr, 0) / results.length,
-};
+}
 const avgCognitive = {
 	ndcg: results.reduce((sum, r) => sum + r.cognitive.ndcg, 0) / results.length,
 	mrr: results.reduce((sum, r) => sum + r.cognitive.mrr, 0) / results.length,
-};
+}
 
-console.log("\nAverage Metrics:");
-console.log(`  Naive:     NDCG=${avgNaive.ndcg.toFixed(3)}, MRR=${avgNaive.mrr.toFixed(3)}`);
-console.log(`  Cognitive: NDCG=${avgCognitive.ndcg.toFixed(3)}, MRR=${avgCognitive.mrr.toFixed(3)}`);
+console.log("\nAverage Metrics:")
+console.log(
+	`  Naive:     NDCG=${avgNaive.ndcg.toFixed(3)}, MRR=${avgNaive.mrr.toFixed(3)}`
+)
+console.log(
+	`  Cognitive: NDCG=${avgCognitive.ndcg.toFixed(3)}, MRR=${avgCognitive.mrr.toFixed(3)}`
+)
 
-const improvement = ((avgCognitive.ndcg - avgNaive.ndcg) / avgNaive.ndcg) * 100;
-console.log(`\nCognitive improvement over naive: ${improvement > 0 ? "+" : ""}${improvement.toFixed(1)}% NDCG`);
+const improvement = ((avgCognitive.ndcg - avgNaive.ndcg) / avgNaive.ndcg) * 100
+console.log(
+	`\nCognitive improvement over naive: ${improvement > 0 ? "+" : ""}${improvement.toFixed(1)}% NDCG`
+)
 
 // Exit with error if cognitive doesn't win overall
 if (cognitiveWins <= naiveWins) {
-	console.log("\n⚠️  Warning: Cognitive retrieval is not outperforming naive!");
-	process.exit(1);
+	console.log("\n⚠️  Warning: Cognitive retrieval is not outperforming naive!")
+	process.exit(1)
 }
 
-console.log("\n✓ Cognitive retrieval provides measurable value over naive similarity.");
+console.log(
+	"\n✓ Cognitive retrieval provides measurable value over naive similarity."
+)

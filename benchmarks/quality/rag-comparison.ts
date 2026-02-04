@@ -16,22 +16,22 @@
  */
 
 import {
-	retrieve,
 	cosineSimilarityBatch,
 	type JsAssociation,
-} from "../../packages/lucid-native/index.js";
+	retrieve,
+} from "../../packages/lucid-native/index.js"
 
-const VERBOSE = process.argv.includes("--verbose");
+const VERBOSE = process.argv.includes("--verbose")
 
 // Embedding simulation - in reality these come from an embedding model
 // We use controlled vectors to test specific retrieval behaviors
 function makeEmbedding(pattern: number[], dim = 1024): number[] {
-	const emb = new Array(dim).fill(0);
+	const emb = new Array(dim).fill(0)
 	for (let i = 0; i < pattern.length && i < dim; i++) {
-		emb[i] = pattern[i];
+		emb[i] = pattern[i]
 	}
-	const norm = Math.sqrt(emb.reduce((sum, x) => sum + x * x, 0));
-	return norm > 0 ? emb.map((x) => x / norm) : emb;
+	const norm = Math.sqrt(emb.reduce((sum, x) => sum + x * x, 0))
+	return norm > 0 ? emb.map((x) => x / norm) : emb
 }
 
 // Simulate semantic similarity between concepts
@@ -55,27 +55,27 @@ const EMBEDDINGS = {
 	// Generic/unrelated
 	meeting_notes: makeEmbedding([0.3, 0.3, 0.3, 1]),
 	lunch_plans: makeEmbedding([0.25, 0.25, 0.25, 0.95]),
-};
-
-interface Scenario {
-	name: string;
-	description: string;
-	ragLimitation: string;
-	query: keyof typeof EMBEDDINGS;
-	memories: {
-		name: string;
-		embedding: keyof typeof EMBEDDINGS;
-		accessHistory: number[];
-		emotionalWeight: number;
-		expectedRank: number;
-	}[];
-	associations?: { source: number; target: number; strength: number }[];
-	currentTime: number;
 }
 
-const MS_HOUR = 3600_000;
-const MS_DAY = 86400_000;
-const NOW = 1_000_000_000;
+interface Scenario {
+	name: string
+	description: string
+	ragLimitation: string
+	query: keyof typeof EMBEDDINGS
+	memories: {
+		name: string
+		embedding: keyof typeof EMBEDDINGS
+		accessHistory: number[]
+		emotionalWeight: number
+		expectedRank: number
+	}[]
+	associations?: { source: number; target: number; strength: number }[]
+	currentTime: number
+}
+
+const MS_HOUR = 3600_000
+const MS_DAY = 86400_000
+const NOW = 1_000_000_000
 
 const scenarios: Scenario[] = [
 	{
@@ -166,8 +166,7 @@ const scenarios: Scenario[] = [
 		name: "associative_retrieval",
 		description:
 			"Query about DB connections should also surface the related pooling config you always use together.",
-		ragLimitation:
-			"RAG only returns direct matches, not associated concepts",
+		ragLimitation: "RAG only returns direct matches, not associated concepts",
 		query: "db_connection",
 		currentTime: NOW,
 		memories: [
@@ -226,8 +225,7 @@ const scenarios: Scenario[] = [
 		name: "combined_signals",
 		description:
 			"Real retrieval combines multiple signals: recent + frequent + important.",
-		ragLimitation:
-			"RAG only has one signal: vector similarity",
+		ragLimitation: "RAG only has one signal: vector similarity",
 		query: "auth_bug",
 		currentTime: NOW,
 		memories: [
@@ -285,38 +283,51 @@ const scenarios: Scenario[] = [
 			},
 		],
 	},
-];
+]
 
 // Metrics
-function computeNDCG(actualRanking: number[], expectedRanking: number[], k: number): number {
-	const maxRank = Math.max(...expectedRanking);
-	const relevance = actualRanking.map((idx) => maxRank - expectedRanking[idx] + 1);
+function computeNDCG(
+	actualRanking: number[],
+	expectedRanking: number[],
+	k: number
+): number {
+	const maxRank = Math.max(...expectedRanking)
+	const relevance = actualRanking.map(
+		(idx) => maxRank - expectedRanking[idx] + 1
+	)
 
 	const dcg = relevance.slice(0, k).reduce((sum, rel, i) => {
-		return sum + (Math.pow(2, rel) - 1) / Math.log2(i + 2);
-	}, 0);
+		return sum + (2 ** rel - 1) / Math.log2(i + 2)
+	}, 0)
 
-	const idealRelevance = [...relevance].sort((a, b) => b - a);
+	const idealRelevance = [...relevance].sort((a, b) => b - a)
 	const idcg = idealRelevance.slice(0, k).reduce((sum, rel, i) => {
-		return sum + (Math.pow(2, rel) - 1) / Math.log2(i + 2);
-	}, 0);
+		return sum + (2 ** rel - 1) / Math.log2(i + 2)
+	}, 0)
 
-	return idcg > 0 ? dcg / idcg : 0;
+	return idcg > 0 ? dcg / idcg : 0
 }
 
-function computeMRR(actualRanking: number[], expectedRanking: number[]): number {
-	const bestExpectedIdx = expectedRanking.indexOf(1);
-	const positionInActual = actualRanking.indexOf(bestExpectedIdx);
-	return positionInActual >= 0 ? 1 / (positionInActual + 1) : 0;
+function computeMRR(
+	actualRanking: number[],
+	expectedRanking: number[]
+): number {
+	const bestExpectedIdx = expectedRanking.indexOf(1)
+	const positionInActual = actualRanking.indexOf(bestExpectedIdx)
+	return positionInActual >= 0 ? 1 / (positionInActual + 1) : 0
 }
 
 // Retrieval functions
-function ragRetrieve(query: number[], embeddings: number[][], k: number): number[] {
+function ragRetrieve(
+	query: number[],
+	embeddings: number[][],
+	k: number
+): number[] {
 	// This is exactly what Pinecone/Weaviate/pgvector do
-	const similarities = cosineSimilarityBatch(query, embeddings);
-	const indexed = similarities.map((sim, idx) => ({ sim, idx }));
-	indexed.sort((a, b) => b.sim - a.sim);
-	return indexed.slice(0, k).map((x) => x.idx);
+	const similarities = cosineSimilarityBatch(query, embeddings)
+	const indexed = similarities.map((sim, idx) => ({ sim, idx }))
+	indexed.sort((a, b) => b.sim - a.sim)
+	return indexed.slice(0, k).map((x) => x.idx)
 }
 
 function cognitiveRetrieve(
@@ -324,20 +335,20 @@ function cognitiveRetrieve(
 	memories: Scenario["memories"],
 	associations: Scenario["associations"] | undefined,
 	currentTime: number,
-	k: number,
+	k: number
 ): number[] {
-	const embeddings = memories.map((m) => EMBEDDINGS[m.embedding]);
-	const accessHistories = memories.map((m) => m.accessHistory);
-	const emotionalWeights = memories.map((m) => m.emotionalWeight);
-	const decayRates = memories.map(() => 0.5);
-	const wmBoosts = memories.map(() => 1.0);
+	const embeddings = memories.map((m) => EMBEDDINGS[m.embedding])
+	const accessHistories = memories.map((m) => m.accessHistory)
+	const emotionalWeights = memories.map((m) => m.emotionalWeight)
+	const decayRates = memories.map(() => 0.5)
+	const wmBoosts = memories.map(() => 1.0)
 
 	const assocs: JsAssociation[] = (associations ?? []).map((a) => ({
 		source: a.source,
 		target: a.target,
 		forwardStrength: a.strength,
 		backwardStrength: a.strength * 0.7,
-	}));
+	}))
 
 	const results = retrieve(
 		query,
@@ -348,62 +359,62 @@ function cognitiveRetrieve(
 		wmBoosts,
 		currentTime,
 		assocs.length > 0 ? assocs : null,
-		{ minProbability: 0, maxResults: k },
-	);
+		{ minProbability: 0, maxResults: k }
+	)
 
-	return results.map((r) => r.index);
+	return results.map((r) => r.index)
 }
 
 // Run benchmark
 interface Result {
-	scenario: string;
-	ragLimitation: string;
-	rag: { ndcg: number; mrr: number; ranking: number[] };
-	cognitive: { ndcg: number; mrr: number; ranking: number[] };
-	winner: "rag" | "cognitive" | "tie";
-	improvement: number;
+	scenario: string
+	ragLimitation: string
+	rag: { ndcg: number; mrr: number; ranking: number[] }
+	cognitive: { ndcg: number; mrr: number; ranking: number[] }
+	winner: "rag" | "cognitive" | "tie"
+	improvement: number
 }
 
 function runScenario(scenario: Scenario): Result {
-	const k = scenario.memories.length;
-	const expectedRanking = scenario.memories.map((m) => m.expectedRank);
-	const queryEmb = EMBEDDINGS[scenario.query];
-	const embeddings = scenario.memories.map((m) => EMBEDDINGS[m.embedding]);
+	const k = scenario.memories.length
+	const expectedRanking = scenario.memories.map((m) => m.expectedRank)
+	const queryEmb = EMBEDDINGS[scenario.query]
+	const embeddings = scenario.memories.map((m) => EMBEDDINGS[m.embedding])
 
-	const ragRanking = ragRetrieve(queryEmb, embeddings, k);
+	const ragRanking = ragRetrieve(queryEmb, embeddings, k)
 	const cognitiveRanking = cognitiveRetrieve(
 		queryEmb,
 		scenario.memories,
 		scenario.associations,
 		scenario.currentTime,
-		k,
-	);
+		k
+	)
 
 	const ragMetrics = {
 		ndcg: computeNDCG(ragRanking, expectedRanking, k),
 		mrr: computeMRR(ragRanking, expectedRanking),
 		ranking: ragRanking,
-	};
+	}
 
 	const cognitiveMetrics = {
 		ndcg: computeNDCG(cognitiveRanking, expectedRanking, k),
 		mrr: computeMRR(cognitiveRanking, expectedRanking),
 		ranking: cognitiveRanking,
-	};
+	}
 
-	let winner: "rag" | "cognitive" | "tie";
+	let winner: "rag" | "cognitive" | "tie"
 	if (Math.abs(cognitiveMetrics.ndcg - ragMetrics.ndcg) < 0.01) {
-		winner = "tie";
+		winner = "tie"
 	} else if (cognitiveMetrics.ndcg > ragMetrics.ndcg) {
-		winner = "cognitive";
+		winner = "cognitive"
 	} else {
-		winner = "rag";
+		winner = "rag"
 	}
 
 	const improvement =
 		ragMetrics.ndcg > 0
 			? ((cognitiveMetrics.ndcg - ragMetrics.ndcg) / ragMetrics.ndcg) * 100
-			: 0;
+			: 0
 
 	return {
 		scenario: scenario.name,
@@ -412,94 +423,132 @@ function runScenario(scenario: Scenario): Result {
 		cognitive: cognitiveMetrics,
 		winner,
 		improvement,
-	};
-}
-
-// Main
-console.log("╔════════════════════════════════════════════════════════════════╗");
-console.log("║     RAG vs Cognitive Memory Retrieval Benchmark                ║");
-console.log("╠════════════════════════════════════════════════════════════════╣");
-console.log("║  Standard RAG (Pinecone, Weaviate, pgvector):                  ║");
-console.log("║    embed query → cosine similarity → top-k                     ║");
-console.log("║                                                                ║");
-console.log("║  Cognitive Memory (lucid-memory):                              ║");
-console.log("║    embed → similarity → MINERVA 2 → base-level → spreading    ║");
-console.log("║    → emotional modulation → combined ranking                   ║");
-console.log("╚════════════════════════════════════════════════════════════════╝\n");
-
-const results = scenarios.map(runScenario);
-
-if (VERBOSE) {
-	for (const scenario of scenarios) {
-		const result = results.find((r) => r.scenario === scenario.name)!;
-		console.log(`\n┌─ ${scenario.name} ─${"─".repeat(60 - scenario.name.length)}┐`);
-		console.log(`│ ${scenario.description}`);
-		console.log(`│`);
-		console.log(`│ RAG limitation: ${scenario.ragLimitation}`);
-		console.log(`│`);
-		console.log(`│ Memories:`);
-		for (let i = 0; i < scenario.memories.length; i++) {
-			const m = scenario.memories[i];
-			console.log(`│   [${i}] ${m.name} (expected rank: ${m.expectedRank})`);
-		}
-		console.log(`│`);
-		console.log(`│ RAG ranking:       [${result.rag.ranking.join(", ")}] → NDCG: ${result.rag.ndcg.toFixed(3)}`);
-		console.log(`│ Cognitive ranking: [${result.cognitive.ranking.join(", ")}] → NDCG: ${result.cognitive.ndcg.toFixed(3)}`);
-		console.log(`│ Winner: ${result.winner.toUpperCase()}${result.improvement > 0 ? ` (+${result.improvement.toFixed(1)}%)` : ""}`);
-		console.log(`└${"─".repeat(65)}┘`);
 	}
 }
 
-console.log("\n Results Summary");
-console.log("═".repeat(80));
+// Main
 console.log(
-	"Scenario                      │ RAG NDCG │ Cognitive │ Winner     │ Improvement",
-);
-console.log("─".repeat(80));
+	"╔════════════════════════════════════════════════════════════════╗"
+)
+console.log(
+	"║     RAG vs Cognitive Memory Retrieval Benchmark                ║"
+)
+console.log(
+	"╠════════════════════════════════════════════════════════════════╣"
+)
+console.log(
+	"║  Standard RAG (Pinecone, Weaviate, pgvector):                  ║"
+)
+console.log(
+	"║    embed query → cosine similarity → top-k                     ║"
+)
+console.log(
+	"║                                                                ║"
+)
+console.log(
+	"║  Cognitive Memory (lucid-memory):                              ║"
+)
+console.log("║    embed → similarity → MINERVA 2 → base-level → spreading    ║")
+console.log(
+	"║    → emotional modulation → combined ranking                   ║"
+)
+console.log(
+	"╚════════════════════════════════════════════════════════════════╝\n"
+)
+
+const results = scenarios.map(runScenario)
+
+if (VERBOSE) {
+	for (const scenario of scenarios) {
+		const result = results.find((r) => r.scenario === scenario.name)!
+		console.log(
+			`\n┌─ ${scenario.name} ─${"─".repeat(60 - scenario.name.length)}┐`
+		)
+		console.log(`│ ${scenario.description}`)
+		console.log(`│`)
+		console.log(`│ RAG limitation: ${scenario.ragLimitation}`)
+		console.log(`│`)
+		console.log(`│ Memories:`)
+		for (let i = 0; i < scenario.memories.length; i++) {
+			const m = scenario.memories[i]
+			console.log(`│   [${i}] ${m.name} (expected rank: ${m.expectedRank})`)
+		}
+		console.log(`│`)
+		console.log(
+			`│ RAG ranking:       [${result.rag.ranking.join(", ")}] → NDCG: ${result.rag.ndcg.toFixed(3)}`
+		)
+		console.log(
+			`│ Cognitive ranking: [${result.cognitive.ranking.join(", ")}] → NDCG: ${result.cognitive.ndcg.toFixed(3)}`
+		)
+		console.log(
+			`│ Winner: ${result.winner.toUpperCase()}${result.improvement > 0 ? ` (+${result.improvement.toFixed(1)}%)` : ""}`
+		)
+		console.log(`└${"─".repeat(65)}┘`)
+	}
+}
+
+console.log("\n Results Summary")
+console.log("═".repeat(80))
+console.log(
+	"Scenario                      │ RAG NDCG │ Cognitive │ Winner     │ Improvement"
+)
+console.log("─".repeat(80))
 
 for (const r of results) {
-	const name = r.scenario.slice(0, 28).padEnd(28);
-	const ragNdcg = r.rag.ndcg.toFixed(3).padStart(8);
-	const cogNdcg = r.cognitive.ndcg.toFixed(3).padStart(9);
-	const winner = r.winner.padEnd(10);
-	const improvement = r.improvement > 0 ? `+${r.improvement.toFixed(1)}%` : "—";
-	console.log(`${name} │${ragNdcg} │${cogNdcg} │ ${winner} │ ${improvement}`);
+	const name = r.scenario.slice(0, 28).padEnd(28)
+	const ragNdcg = r.rag.ndcg.toFixed(3).padStart(8)
+	const cogNdcg = r.cognitive.ndcg.toFixed(3).padStart(9)
+	const winner = r.winner.padEnd(10)
+	const improvement = r.improvement > 0 ? `+${r.improvement.toFixed(1)}%` : "—"
+	console.log(`${name} │${ragNdcg} │${cogNdcg} │ ${winner} │ ${improvement}`)
 }
 
-console.log("─".repeat(80));
+console.log("─".repeat(80))
 
 // Summary statistics
-const cognitiveWins = results.filter((r) => r.winner === "cognitive").length;
-const ragWins = results.filter((r) => r.winner === "rag").length;
-const ties = results.filter((r) => r.winner === "tie").length;
+const cognitiveWins = results.filter((r) => r.winner === "cognitive").length
+const ragWins = results.filter((r) => r.winner === "rag").length
+const ties = results.filter((r) => r.winner === "tie").length
 
-const avgRagNdcg = results.reduce((sum, r) => sum + r.rag.ndcg, 0) / results.length;
-const avgCogNdcg = results.reduce((sum, r) => sum + r.cognitive.ndcg, 0) / results.length;
-const avgRagMrr = results.reduce((sum, r) => sum + r.rag.mrr, 0) / results.length;
-const avgCogMrr = results.reduce((sum, r) => sum + r.cognitive.mrr, 0) / results.length;
-const overallImprovement = ((avgCogNdcg - avgRagNdcg) / avgRagNdcg) * 100;
+const avgRagNdcg =
+	results.reduce((sum, r) => sum + r.rag.ndcg, 0) / results.length
+const avgCogNdcg =
+	results.reduce((sum, r) => sum + r.cognitive.ndcg, 0) / results.length
+const avgRagMrr =
+	results.reduce((sum, r) => sum + r.rag.mrr, 0) / results.length
+const avgCogMrr =
+	results.reduce((sum, r) => sum + r.cognitive.mrr, 0) / results.length
+const overallImprovement = ((avgCogNdcg - avgRagNdcg) / avgRagNdcg) * 100
 
-console.log(`\n Summary`);
-console.log("─".repeat(40));
-console.log(`Cognitive wins:  ${cognitiveWins}/${results.length} scenarios`);
-console.log(`RAG wins:        ${ragWins}/${results.length} scenarios`);
-console.log(`Ties:            ${ties}/${results.length} scenarios`);
-console.log("");
-console.log(`Average NDCG:    RAG ${avgRagNdcg.toFixed(3)} → Cognitive ${avgCogNdcg.toFixed(3)}`);
-console.log(`Average MRR:     RAG ${avgRagMrr.toFixed(3)} → Cognitive ${avgCogMrr.toFixed(3)}`);
-console.log("");
-console.log(`Overall improvement: ${overallImprovement > 0 ? "+" : ""}${overallImprovement.toFixed(1)}% NDCG`);
+console.log(`\n Summary`)
+console.log("─".repeat(40))
+console.log(`Cognitive wins:  ${cognitiveWins}/${results.length} scenarios`)
+console.log(`RAG wins:        ${ragWins}/${results.length} scenarios`)
+console.log(`Ties:            ${ties}/${results.length} scenarios`)
+console.log("")
+console.log(
+	`Average NDCG:    RAG ${avgRagNdcg.toFixed(3)} → Cognitive ${avgCogNdcg.toFixed(3)}`
+)
+console.log(
+	`Average MRR:     RAG ${avgRagMrr.toFixed(3)} → Cognitive ${avgCogMrr.toFixed(3)}`
+)
+console.log("")
+console.log(
+	`Overall improvement: ${overallImprovement > 0 ? "+" : ""}${overallImprovement.toFixed(1)}% NDCG`
+)
 
 // Performance note
-console.log(`\n Performance Note`);
-console.log("─".repeat(40));
-console.log(`Standard RAG (Pinecone):  10-50ms latency, $70+/month`);
-console.log(`Cognitive (lucid-memory): ~2.7ms latency, $0/month (local)`);
-console.log(`Speed advantage: ~10-20x faster`);
+console.log(`\n Performance Note`)
+console.log("─".repeat(40))
+console.log(`Standard RAG (Pinecone):  10-50ms latency, $70+/month`)
+console.log(`Cognitive (lucid-memory): ~2.7ms latency, $0/month (local)`)
+console.log(`Speed advantage: ~10-20x faster`)
 
 if (ragWins > cognitiveWins) {
-	console.log("\n⚠️  Warning: RAG is outperforming cognitive retrieval!");
-	process.exit(1);
+	console.log("\n⚠️  Warning: RAG is outperforming cognitive retrieval!")
+	process.exit(1)
 }
 
-console.log("\n✓ Cognitive retrieval provides measurable value over standard RAG.");
+console.log(
+	"\n✓ Cognitive retrieval provides measurable value over standard RAG."
+)

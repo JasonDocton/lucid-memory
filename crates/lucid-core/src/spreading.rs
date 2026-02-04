@@ -412,16 +412,9 @@ pub fn create_episode_links(
 		for j in (i + 1)..n.min(i + config.max_temporal_distance + 1) {
 			let distance = j - i;
 
-			let forward = compute_temporal_link_strength(
-				config.forward_strength,
-				distance,
-				config,
-			);
-			let backward = compute_temporal_link_strength(
-				config.backward_strength,
-				distance,
-				config,
-			);
+			let forward = compute_temporal_link_strength(config.forward_strength, distance, config);
+			let backward =
+				compute_temporal_link_strength(config.backward_strength, distance, config);
 
 			links.push(TemporalLink {
 				source_position: i,
@@ -526,9 +519,9 @@ pub fn spread_temporal_activation_multi(
 
 	for links in episode_links {
 		// Check if seed memory is in this episode
-		let in_episode = links.iter().any(|l| {
-			l.source_memory == seed_memory || l.target_memory == seed_memory
-		});
+		let in_episode = links
+			.iter()
+			.any(|l| l.source_memory == seed_memory || l.target_memory == seed_memory);
 
 		if in_episode {
 			let result = spread_temporal_activation(
@@ -621,9 +614,8 @@ pub fn find_temporal_neighbors(
 
 	// Sort by distance (closest first), then by strength (highest first)
 	neighbors.sort_by(|a, b| {
-		a.2.cmp(&b.2).then_with(|| {
-			b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-		})
+		a.2.cmp(&b.2)
+			.then_with(|| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
 	});
 
 	// Return (memory, strength) pairs
