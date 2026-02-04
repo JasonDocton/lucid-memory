@@ -1355,10 +1355,10 @@ fn js_assoc_decay_config_to_core(
 
 fn parse_association_state(s: &str) -> lucid_core::activation::AssociationState {
 	match s.to_lowercase().as_str() {
-		"fresh" => lucid_core::activation::AssociationState::Fresh,
 		"consolidating" => lucid_core::activation::AssociationState::Consolidating,
 		"consolidated" => lucid_core::activation::AssociationState::Consolidated,
 		"reconsolidating" => lucid_core::activation::AssociationState::Reconsolidating,
+		// "fresh" and any invalid input defaults to Fresh
 		_ => lucid_core::activation::AssociationState::Fresh,
 	}
 }

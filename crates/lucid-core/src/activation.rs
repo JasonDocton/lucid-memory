@@ -635,6 +635,7 @@ pub fn filter_by_probability(
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp, clippy::suboptimal_flops)]
 mod tests {
 	use super::*;
 
