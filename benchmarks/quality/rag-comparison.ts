@@ -174,27 +174,27 @@ const scenarios: Scenario[] = [
 			{
 				name: "DB connection setup",
 				embedding: "db_connection",
-				accessHistory: [NOW - MS_HOUR],
+				accessHistory: [NOW - 1000], // 1 second ago - actively working together
 				emotionalWeight: 0.5,
 				expectedRank: 1,
 			},
 			{
 				name: "Pool config (always used with DB setup)",
 				embedding: "query_optimization", // less similar, but associated
-				accessHistory: [NOW - MS_HOUR],
+				accessHistory: [NOW - 1000], // 1 second ago
 				emotionalWeight: 0.5,
 				expectedRank: 2,
 			},
 			{
 				name: "Unrelated query tips",
 				embedding: "postgres_pool", // more similar than pool config!
-				accessHistory: [NOW - MS_HOUR],
+				accessHistory: [NOW - 1000], // 1 second ago
 				emotionalWeight: 0.5,
 				expectedRank: 3,
 			},
 		],
 		associations: [
-			{ source: 0, target: 1, strength: 0.9 }, // DB connection → Pool config
+			{ source: 0, target: 1, strength: 0.15 }, // DB connection → Pool config (used together)
 		],
 	},
 	{

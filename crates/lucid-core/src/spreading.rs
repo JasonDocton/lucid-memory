@@ -184,13 +184,14 @@ pub fn spread_activation(
 			}
 		}
 
-		if next_frontier.is_empty() {
-			break;
-		}
-
-		// Update activations
+		// Update activations BEFORE checking frontier
+		// This ensures spread is applied even when targets are already seeds
 		for (idx, activation) in next_activations {
 			activations[idx] += activation;
+		}
+
+		if next_frontier.is_empty() {
+			break;
 		}
 
 		visited_by_depth.push(next_frontier.clone());
