@@ -60,6 +60,9 @@ LUCID_DIR="$HOME/.lucid"
 CLAUDE_SETTINGS_DIR="$HOME/.claude"
 # Claude Code uses ~/.claude.json for MCP servers
 MCP_CONFIG="$HOME/.claude.json"
+# Codex uses ~/.codex/config.toml
+CODEX_DIR="$HOME/.codex"
+CODEX_CONFIG="$CODEX_DIR/config.toml"
 
 # Check if Lucid is installed
 if [ ! -d "$LUCID_DIR" ]; then
@@ -80,6 +83,14 @@ fi
 CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
 if [ -f "$CLAUDE_SETTINGS" ] && grep -q "UserPromptSubmit" "$CLAUDE_SETTINGS" 2>/dev/null; then
     REMOVE_LIST="${REMOVE_LIST}\n  ${C4}•${NC} Hook config from ~/.claude/settings.json"
+fi
+
+if [ -f "$CODEX_CONFIG" ] && grep -q "lucid-memory" "$CODEX_CONFIG" 2>/dev/null; then
+    REMOVE_LIST="${REMOVE_LIST}\n  ${C4}•${NC} MCP server config from ~/.codex/config.toml"
+fi
+
+if [ -f "$CODEX_CONFIG" ] && grep -q "codex-notify.sh" "$CODEX_CONFIG" 2>/dev/null; then
+    REMOVE_LIST="${REMOVE_LIST}\n  ${C4}•${NC} Notify hook from ~/.codex/config.toml"
 fi
 
 # Check for PATH entry
@@ -159,11 +170,37 @@ NODE_SCRIPT
     fi
 fi
 
+# === Remove Codex Config ===
+
+if [ -f "$CODEX_CONFIG" ]; then
+    info "Removing Codex MCP configuration..."
+
+    # Remove lucid-memory section from config.toml
+    if grep -q '^\[mcp_servers\.lucid-memory\]' "$CODEX_CONFIG"; then
+        # Use awk to remove the section
+        awk '
+            /^\[mcp_servers\.lucid-memory\]/ { skip=1; next }
+            /^\[/ { skip=0 }
+            !skip
+        ' "$CODEX_CONFIG" > "$CODEX_CONFIG.tmp"
+        mv "$CODEX_CONFIG.tmp" "$CODEX_CONFIG"
+        success "Codex MCP server config removed"
+    fi
+
+    # Remove notify hook reference
+    if grep -q "codex-notify.sh" "$CODEX_CONFIG"; then
+        # Remove the notify line that references our hook
+        grep -v "codex-notify.sh" "$CODEX_CONFIG" > "$CODEX_CONFIG.tmp"
+        mv "$CODEX_CONFIG.tmp" "$CODEX_CONFIG"
+        success "Codex notify hook removed"
+    fi
+fi
+
 # === Remove Hooks ===
 
 info "Removing hook configuration..."
 
-# Remove hook config from settings.json
+# Remove hook config from settings.json (Claude)
 CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
 if [ -f "$CLAUDE_SETTINGS" ]; then
     if command -v jq &> /dev/null; then

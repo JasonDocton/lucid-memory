@@ -23,8 +23,82 @@ const command = args[0]
 // Top-level regex for version tag stripping
 const versionTagRegex = /^v/
 
+// biome-ignore lint/style/noProcessEnv: CLI requires environment access
+const LUCID_DIR = `${process.env.HOME}/.lucid`
+// biome-ignore lint/style/noProcessEnv: CLI requires client detection
+const LUCID_CLIENT = process.env.LUCID_CLIENT || "claude"
+
+// Multi-client config types
+const databaseModes = {
+	shared: "shared",
+	perClient: "per-client",
+	profiles: "profiles",
+} as const
+
+type DatabaseMode = (typeof databaseModes)[keyof typeof databaseModes]
+
+interface ClientConfig {
+	enabled: boolean
+	profile: string
+}
+
+interface ProfileConfig {
+	dbPath: string
+}
+
+interface LucidConfig {
+	autoUpdate?: boolean
+	databaseMode?: DatabaseMode
+	clients?: Record<string, ClientConfig>
+	profiles?: Record<string, ProfileConfig>
+	installedAt?: string
+}
+
+async function loadConfig(): Promise<LucidConfig> {
+	try {
+		const configPath = `${LUCID_DIR}/config.json`
+		const file = Bun.file(configPath)
+		if (await file.exists()) {
+			return await file.json()
+		}
+	} catch {
+		// Return empty config on error
+	}
+	return {}
+}
+
+async function saveConfig(config: LucidConfig): Promise<void> {
+	const configPath = `${LUCID_DIR}/config.json`
+	await Bun.write(configPath, JSON.stringify(config, null, 2))
+}
+
+function resolveDbPath(config: LucidConfig, client: string): string {
+	const mode = config.databaseMode || "shared"
+
+	if (mode === "per-client") {
+		return `${LUCID_DIR}/memory-${client}.db`
+	}
+
+	if (mode === "profiles") {
+		const clientConfig = config.clients?.[client]
+		const profileName = clientConfig?.profile || "default"
+		const profile = config.profiles?.[profileName]
+		const rawPath = profile?.dbPath || `${LUCID_DIR}/memory.db`
+		// biome-ignore lint/style/noProcessEnv: Required for tilde expansion
+		// biome-ignore lint/style/noNonNullAssertion: HOME always defined on Unix
+		const home = process.env.HOME!
+		return rawPath.startsWith("~") ? rawPath.replace("~", home) : rawPath
+	}
+
+	return `${LUCID_DIR}/memory.db`
+}
+
 async function main() {
-	const retrieval = new LucidRetrieval()
+	// Load config and resolve database path
+	const config = await loadConfig()
+	const dbPath = resolveDbPath(config, LUCID_CLIENT)
+
+	const retrieval = new LucidRetrieval({ dbPath })
 
 	// Try to set up embeddings
 	const embeddingConfig = await detectProvider()
@@ -33,6 +107,180 @@ async function main() {
 	}
 
 	switch (command) {
+		case "config": {
+			const subCommand = args[1]
+
+			switch (subCommand) {
+				case "show": {
+					console.log("Lucid Memory Configuration")
+					console.log("==========================")
+					console.log("")
+					console.log(`Config file: ${LUCID_DIR}/config.json`)
+					console.log(`Current client: ${LUCID_CLIENT}`)
+					console.log(`Database path: ${dbPath}`)
+					console.log("")
+
+					if (Object.keys(config).length === 0) {
+						console.log("No configuration found (using defaults)")
+						console.log("")
+						console.log("Defaults:")
+						console.log("  Database mode: shared")
+						console.log("  Database: ~/.lucid/memory.db")
+					} else {
+						console.log(`Database mode: ${config.databaseMode || "shared"}`)
+						console.log(`Auto-update: ${config.autoUpdate ?? false}`)
+						if (config.installedAt) {
+							console.log(`Installed: ${config.installedAt}`)
+						}
+						console.log("")
+
+						if (config.clients) {
+							console.log("Clients:")
+							for (const [name, client] of Object.entries(config.clients)) {
+								const status = client.enabled ? "enabled" : "disabled"
+								console.log(`  ${name}: ${status}, profile: ${client.profile}`)
+							}
+							console.log("")
+						}
+
+						if (config.profiles) {
+							console.log("Profiles:")
+							for (const [name, profile] of Object.entries(config.profiles)) {
+								console.log(`  ${name}: ${profile.dbPath}`)
+							}
+						}
+					}
+					break
+				}
+
+				case "set-profile": {
+					const clientName = args[2]
+					const profileName = args[3]
+
+					if (!clientName || !profileName) {
+						console.error("Usage: lucid config set-profile <client> <profile>")
+						console.error("Example: lucid config set-profile claude work")
+						process.exit(1)
+					}
+
+					// Ensure clients object exists
+					if (!config.clients) {
+						config.clients = {}
+					}
+
+					// Get or create client config
+					const clientConfig = config.clients[clientName] || {
+						enabled: true,
+						profile: "default",
+					}
+					clientConfig.profile = profileName
+					config.clients[clientName] = clientConfig
+
+					// Ensure profile exists
+					if (!config.profiles) {
+						config.profiles = {}
+					}
+					if (!config.profiles[profileName]) {
+						config.profiles[profileName] = {
+							dbPath: `~/.lucid/memory-${profileName}.db`,
+						}
+						console.log(`Created profile '${profileName}'`)
+					}
+
+					// Ensure database mode is profiles
+					if (config.databaseMode !== "profiles") {
+						config.databaseMode = "profiles"
+						console.log("Switched to 'profiles' database mode")
+					}
+
+					await saveConfig(config)
+					console.log(`Set ${clientName} to use profile '${profileName}'`)
+					console.log(`Database: ${config.profiles[profileName].dbPath}`)
+					break
+				}
+
+				case "create-profile": {
+					const profileName = args[2]
+					const customPath = args
+						.find((a) => a.startsWith("--path="))
+						?.split("=")[1]
+
+					if (!profileName) {
+						console.error(
+							"Usage: lucid config create-profile <name> [--path=<dbPath>]"
+						)
+						console.error("Example: lucid config create-profile work")
+						console.error(
+							"Example: lucid config create-profile work --path=~/.lucid/work.db"
+						)
+						process.exit(1)
+					}
+
+					// Ensure profiles object exists
+					if (!config.profiles) {
+						config.profiles = {}
+					}
+
+					if (config.profiles[profileName]) {
+						console.error(`Profile '${profileName}' already exists`)
+						console.error(
+							`Current path: ${config.profiles[profileName].dbPath}`
+						)
+						process.exit(1)
+					}
+
+					const dbPathForProfile =
+						customPath || `~/.lucid/memory-${profileName}.db`
+					config.profiles[profileName] = { dbPath: dbPathForProfile }
+
+					await saveConfig(config)
+					console.log(`Created profile '${profileName}'`)
+					console.log(`Database: ${dbPathForProfile}`)
+					console.log("")
+					console.log("To use this profile:")
+					console.log(`  lucid config set-profile <client> ${profileName}`)
+					break
+				}
+
+				case "set-mode": {
+					const mode = args[2] as DatabaseMode | undefined
+
+					if (!mode || !["shared", "per-client", "profiles"].includes(mode)) {
+						console.error("Usage: lucid config set-mode <mode>")
+						console.error("Modes:")
+						console.error("  shared     - All clients share one database")
+						console.error("  per-client - Each client has its own database")
+						console.error("  profiles   - Custom profiles with named databases")
+						process.exit(1)
+					}
+
+					config.databaseMode = mode
+					await saveConfig(config)
+					console.log(`Database mode set to '${mode}'`)
+					break
+				}
+
+				default: {
+					console.log(`
+Lucid Config Commands
+
+  lucid config show                         Show current configuration
+  lucid config set-mode <mode>              Set database mode (shared|per-client|profiles)
+  lucid config set-profile <client> <name>  Set profile for a client
+  lucid config create-profile <name>        Create a new profile
+
+Examples:
+  lucid config show
+  lucid config set-mode per-client
+  lucid config set-profile codex work
+  lucid config create-profile work --path=~/.lucid/work.db
+          `)
+					break
+				}
+			}
+			break
+		}
+
 		case "context": {
 			const task = args[1] || ""
 			const projectPath = args
@@ -148,6 +396,12 @@ async function main() {
 			console.log("━━━━━━━━━━━━━━━━━━━━━━")
 			console.log("")
 
+			// Multi-client info
+			console.log("Client:")
+			console.log(`  Current: ${LUCID_CLIENT}`)
+			console.log(`  Mode: ${config.databaseMode || "shared"}`)
+			console.log("")
+
 			// Check Ollama health if configured
 			if (embeddingConfig?.provider === "ollama") {
 				const ollamaHost =
@@ -208,7 +462,7 @@ async function main() {
 
 			// Database status
 			console.log("Database:")
-			console.log(`  Location: ~/.lucid/memory.db`)
+			console.log(`  Location: ${dbPath}`)
 			console.log(`  Size: ${Math.round(stats.dbSizeBytes / 1024)} KB`)
 			console.log(`  Memories: ${stats.memoryCount}`)
 			console.log(`  Associations: ${stats.associationCount}`)
@@ -504,14 +758,15 @@ async function main() {
 			const { join } = await import("node:path")
 			const { homedir } = await import("node:os")
 
-			const LUCID_DIR = join(homedir(), ".lucid")
-			const dbPath = join(LUCID_DIR, "memory.db")
+			const lucidDir = join(homedir(), ".lucid")
+			// Use the config-aware dbPath from earlier in main()
+			const backupSource = dbPath
 
 			// Check if database exists
 			try {
-				statSync(dbPath)
+				statSync(backupSource)
 			} catch {
-				console.error("No database found at ~/.lucid/memory.db")
+				console.error(`No database found at ${backupSource}`)
 				process.exit(1)
 			}
 
@@ -523,20 +778,20 @@ async function main() {
 				.toISOString()
 				.replace(/[:.]/g, "-")
 				.slice(0, 19)
-			const defaultBackupPath = join(LUCID_DIR, `memory-backup-${timestamp}.db`)
-			const backupPath = outputArg || defaultBackupPath
+			const defaultBackupPath = join(lucidDir, `memory-backup-${timestamp}.db`)
+			const backupDest = outputArg || defaultBackupPath
 
 			try {
-				copyFileSync(dbPath, backupPath)
-				const backupSize = statSync(backupPath).size
+				copyFileSync(backupSource, backupDest)
+				const backupSize = statSync(backupDest).size
 				const sizeKB = Math.round(backupSize / 1024)
 
 				console.log("✓ Backup created")
-				console.log(`  Location: ${backupPath}`)
+				console.log(`  Location: ${backupDest}`)
 				console.log(`  Size: ${sizeKB} KB`)
 				console.log("")
 				console.log("To restore, copy the backup over the original:")
-				console.log(`  cp "${backupPath}" ~/.lucid/memory.db`)
+				console.log(`  cp "${backupDest}" "${backupSource}"`)
 			} catch (error) {
 				console.error(
 					"Backup failed:",
@@ -561,6 +816,11 @@ Commands:
     --type=TYPE                      Type: learning, decision, context, bug, solution
     --project=/path                  Associate with project
 
+  config show                        Show current configuration
+  config set-mode <mode>             Set database mode (shared|per-client|profiles)
+  config set-profile <client> <name> Set profile for a client
+  config create-profile <name>       Create a new profile
+
   stats                              Show memory statistics
   status                             Check system status
   update                             Check for and install updates
@@ -570,8 +830,14 @@ Commands:
 Examples:
   lucid context "implementing auth" --project=/my/project
   lucid store "Auth uses JWT tokens" --type=decision
+  lucid config show
+  lucid config set-profile codex work
   lucid backup
   lucid backup --output=~/my-backup.db
+
+Multi-Client Support:
+  Set LUCID_CLIENT env var to switch between clients (claude, codex).
+  Use 'lucid config' commands to manage profiles and database isolation.
 
 Visual memories are automatically created when images/videos are shared.
 They are automatically retrieved via semantic search on the context command.

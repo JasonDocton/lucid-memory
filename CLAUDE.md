@@ -6,7 +6,7 @@ Bun, Rust, TypeScript
 
 ## Navigation
 
-See `.claude/map.md` for project structure & key file locations.
+See `.claude/PROJECT_MAP.md` for project structure & key file locations.
 
 ## Code Quality
 

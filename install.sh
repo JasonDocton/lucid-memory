@@ -171,7 +171,7 @@ add_to_mcp_config() {
 
     # If jq is available, use it (safest)
     if command -v jq &> /dev/null; then
-        jq --arg cmd "$server_path" '.mcpServers["lucid-memory"] = {"type": "stdio", "command": $cmd, "args": []}' \
+        jq --arg cmd "$server_path" '.mcpServers["lucid-memory"] = {"type": "stdio", "command": $cmd, "args": [], "env": {"LUCID_CLIENT": "claude"}}' \
             "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
         return 0
     fi
@@ -184,7 +184,7 @@ with open('$config_file', 'r') as f:
     config = json.load(f)
 if 'mcpServers' not in config:
     config['mcpServers'] = {}
-config['mcpServers']['lucid-memory'] = {'type': 'stdio', 'command': '$server_path', 'args': []}
+config['mcpServers']['lucid-memory'] = {'type': 'stdio', 'command': '$server_path', 'args': [], 'env': {'LUCID_CLIENT': 'claude'}}
 with open('$config_file', 'w') as f:
     json.dump(config, f, indent=2)
 EOF
@@ -196,7 +196,7 @@ EOF
         warn "Cannot safely modify existing MCP config without jq or python"
         echo ""
         echo "Please manually add this to $config_file in the mcpServers section:"
-        echo -e "${BOLD}  \"lucid-memory\": { \"type\": \"stdio\", \"command\": \"$server_path\", \"args\": [] }${NC}"
+        echo -e "${BOLD}  \"lucid-memory\": { \"type\": \"stdio\", \"command\": \"$server_path\", \"args\": [], \"env\": {\"LUCID_CLIENT\": \"claude\"} }${NC}"
         echo ""
         if [ "$INTERACTIVE" = true ]; then
             read -p "Press Enter after you've added it (or Ctrl+C to abort)..."
@@ -209,7 +209,8 @@ EOF
     "lucid-memory": {
       "type": "stdio",
       "command": "$server_path",
-      "args": []
+      "args": [],
+      "env": {"LUCID_CLIENT": "claude"}
     }
   }
 }
@@ -1045,6 +1046,69 @@ case $EMBED_CHOICE in
 esac
 show_progress  # Step 5: Embedding provider
 
+# === Client Selection ===
+
+echo ""
+echo -e "${BOLD}Which AI coding assistants do you use?${NC}"
+echo "  [1] Claude Code only"
+echo "  [2] OpenAI Codex only"
+echo "  [3] Both (recommended)"
+echo ""
+
+if [ "$INTERACTIVE" = true ]; then
+    read -p "Choice [3]: " CLIENT_CHOICE
+    CLIENT_CHOICE=${CLIENT_CHOICE:-3}
+else
+    echo "Non-interactive mode, defaulting to Claude Code only..."
+    CLIENT_CHOICE=1
+fi
+
+INSTALL_CLAUDE=false
+INSTALL_CODEX=false
+case $CLIENT_CHOICE in
+    1) INSTALL_CLAUDE=true ;;
+    2) INSTALL_CODEX=true ;;
+    *) INSTALL_CLAUDE=true; INSTALL_CODEX=true ;;
+esac
+
+# === Database Mode (only if both clients) ===
+
+DB_MODE="shared"
+CLAUDE_PROFILE="default"
+CODEX_PROFILE="default"
+
+if [ "$INSTALL_CLAUDE" = true ] && [ "$INSTALL_CODEX" = true ]; then
+    echo ""
+    echo -e "${BOLD}Database configuration:${NC}"
+    echo "  [1] Shared - Same memories for all clients (recommended)"
+    echo "  [2] Separate - Each client has its own database"
+    echo "  [3] Profiles - Custom profiles (e.g., work vs home)"
+    echo ""
+
+    if [ "$INTERACTIVE" = true ]; then
+        read -p "Choice [1]: " DB_CHOICE
+        DB_CHOICE=${DB_CHOICE:-1}
+    else
+        DB_CHOICE=1
+    fi
+
+    case $DB_CHOICE in
+        2) DB_MODE="per-client" ;;
+        3)
+            DB_MODE="profiles"
+            if [ "$INTERACTIVE" = true ]; then
+                read -p "Profile for Claude Code [home]: " CLAUDE_PROFILE
+                CLAUDE_PROFILE=${CLAUDE_PROFILE:-home}
+                read -p "Profile for Codex [work]: " CODEX_PROFILE
+                CODEX_PROFILE=${CODEX_PROFILE:-work}
+            else
+                CLAUDE_PROFILE="home"
+                CODEX_PROFILE="work"
+            fi
+            ;;
+    esac
+fi
+
 # === Download Whisper Model for Transcription ===
 
 LUCID_MODELS="$LUCID_DIR/models"
@@ -1084,13 +1148,46 @@ else
     AUTO_UPDATE=true
 fi
 
-# Write config file
-cat > "$LUCID_DIR/config.json" << EOF
+# Write config file with multi-client support
+write_config() {
+    local auto_update="$1"
+    local db_mode="$2"
+    local install_claude="$3"
+    local install_codex="$4"
+    local claude_profile="$5"
+    local codex_profile="$6"
+
+    # Build clients section
+    local clients=""
+    if [ "$install_claude" = true ] && [ "$install_codex" = true ]; then
+        clients="\"claude\": {\"enabled\": true, \"profile\": \"$claude_profile\"}, \"codex\": {\"enabled\": true, \"profile\": \"$codex_profile\"}"
+    elif [ "$install_claude" = true ]; then
+        clients="\"claude\": {\"enabled\": true, \"profile\": \"$claude_profile\"}"
+    elif [ "$install_codex" = true ]; then
+        clients="\"codex\": {\"enabled\": true, \"profile\": \"$codex_profile\"}"
+    fi
+
+    # Build profiles section
+    local profiles="\"default\": {\"dbPath\": \"~/.lucid/memory.db\"}"
+    if [ "$claude_profile" != "default" ]; then
+        profiles="$profiles, \"$claude_profile\": {\"dbPath\": \"~/.lucid/memory-$claude_profile.db\"}"
+    fi
+    if [ "$codex_profile" != "default" ] && [ "$codex_profile" != "$claude_profile" ]; then
+        profiles="$profiles, \"$codex_profile\": {\"dbPath\": \"~/.lucid/memory-$codex_profile.db\"}"
+    fi
+
+    cat > "$LUCID_DIR/config.json" << CONFIGEOF
 {
-  "autoUpdate": $AUTO_UPDATE,
-  "installedAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  "autoUpdate": $auto_update,
+  "installedAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "databaseMode": "$db_mode",
+  "clients": {$clients},
+  "profiles": {$profiles}
 }
-EOF
+CONFIGEOF
+}
+
+write_config "$AUTO_UPDATE" "$DB_MODE" "$INSTALL_CLAUDE" "$INSTALL_CODEX" "$CLAUDE_PROFILE" "$CODEX_PROFILE"
 
 if [ "$AUTO_UPDATE" = true ]; then
     success "Auto-updates enabled"
@@ -1100,49 +1197,121 @@ fi
 
 # === Configure Claude Code ===
 
-echo ""
-echo "Configuring Claude Code..."
+if [ "$INSTALL_CLAUDE" = true ]; then
+    echo ""
+    echo "Configuring Claude Code..."
 
-# Backup existing config
-if [ -f "$MCP_CONFIG" ]; then
-    cp "$MCP_CONFIG" "$MCP_CONFIG.backup"
-    success "Backed up existing config"
+    # Backup existing config
+    if [ -f "$MCP_CONFIG" ]; then
+        cp "$MCP_CONFIG" "$MCP_CONFIG.backup"
+        success "Backed up existing config"
 
-    # Add our server to existing config
-    add_to_mcp_config "$MCP_CONFIG" "$LUCID_BIN/lucid-server"
-else
-    # Create new config
-    cat > "$MCP_CONFIG" << EOF
+        # Add our server to existing config
+        add_to_mcp_config "$MCP_CONFIG" "$LUCID_BIN/lucid-server"
+    else
+        # Create new config
+        cat > "$MCP_CONFIG" << EOF
 {
   "mcpServers": {
     "lucid-memory": {
       "type": "stdio",
       "command": "$LUCID_BIN/lucid-server",
-      "args": []
+      "args": [],
+      "env": {"LUCID_CLIENT": "claude"}
     }
   }
 }
 EOF
+    fi
+
+    success "Claude Code MCP configured"
 fi
 
-success "MCP server configured"
-show_progress  # Step 6: Configure Claude Code
+# === Configure OpenAI Codex ===
+
+configure_codex_mcp() {
+    local CODEX_DIR="$HOME/.codex"
+    local CODEX_CONFIG="$CODEX_DIR/config.toml"
+
+    mkdir -p "$CODEX_DIR"
+
+    # Backup if exists
+    [ -f "$CODEX_CONFIG" ] && cp "$CODEX_CONFIG" "$CODEX_CONFIG.backup"
+
+    # Remove existing lucid-memory section if present
+    if [ -f "$CODEX_CONFIG" ] && grep -q '^\[mcp_servers\.lucid-memory\]' "$CODEX_CONFIG"; then
+        # Use awk to remove the section (everything from the header to next section or EOF)
+        awk '
+            /^\[mcp_servers\.lucid-memory\]/ { skip=1; next }
+            /^\[/ { skip=0 }
+            !skip
+        ' "$CODEX_CONFIG" > "$CODEX_CONFIG.tmp"
+        mv "$CODEX_CONFIG.tmp" "$CODEX_CONFIG"
+    fi
+
+    # Append new config
+    cat >> "$CODEX_CONFIG" << CODEXEOF
+
+[mcp_servers.lucid-memory]
+enabled = true
+command = "$HOME/.lucid/bin/lucid-server"
+args = []
+
+[mcp_servers.lucid-memory.env]
+LUCID_CLIENT = "codex"
+CODEXEOF
+
+    success "Codex MCP configured"
+}
+
+if [ "$INSTALL_CODEX" = true ]; then
+    echo ""
+    echo "Configuring OpenAI Codex..."
+    configure_codex_mcp
+fi
+
+show_progress  # Step 6: Configure clients
 
 # === Install Hooks ===
 
 echo ""
 echo "Installing memory hooks..."
 
-# Copy hook script to lucid directory
+# Copy hook scripts to lucid directory
 LUCID_HOOKS_DIR="$LUCID_DIR/hooks"
 mkdir -p "$LUCID_HOOKS_DIR"
 
-if [ -f "$LUCID_DIR/server/hooks/user-prompt-submit.sh" ]; then
-    cp "$LUCID_DIR/server/hooks/user-prompt-submit.sh" "$LUCID_HOOKS_DIR/user-prompt-submit.sh"
-    chmod +x "$LUCID_HOOKS_DIR/user-prompt-submit.sh"
-    success "Hook script installed"
-else
-    warn "Hook script not found - automatic context injection disabled"
+# Claude Code hook (UserPromptSubmit)
+if [ "$INSTALL_CLAUDE" = true ]; then
+    if [ -f "$LUCID_DIR/server/hooks/user-prompt-submit.sh" ]; then
+        cp "$LUCID_DIR/server/hooks/user-prompt-submit.sh" "$LUCID_HOOKS_DIR/user-prompt-submit.sh"
+        chmod +x "$LUCID_HOOKS_DIR/user-prompt-submit.sh"
+        success "Claude hook script installed"
+    else
+        warn "Claude hook script not found - automatic context injection disabled"
+    fi
+fi
+
+# Codex hook (notify on turn-complete)
+if [ "$INSTALL_CODEX" = true ]; then
+    if [ -f "$LUCID_DIR/server/hooks/codex-notify.sh" ]; then
+        cp "$LUCID_DIR/server/hooks/codex-notify.sh" "$LUCID_HOOKS_DIR/codex-notify.sh"
+        chmod +x "$LUCID_HOOKS_DIR/codex-notify.sh"
+        success "Codex hook script installed"
+
+        # Add notify hook to Codex config
+        CODEX_CONFIG="$HOME/.codex/config.toml"
+        if [ -f "$CODEX_CONFIG" ]; then
+            # Check if notify is already configured
+            if ! grep -q '^notify' "$CODEX_CONFIG"; then
+                echo "" >> "$CODEX_CONFIG"
+                echo "notify = [\"$LUCID_HOOKS_DIR/codex-notify.sh\"]" >> "$CODEX_CONFIG"
+                success "Codex notify hook configured"
+            fi
+        fi
+    else
+        warn "Codex hook script not found - automatic memory capture disabled"
+    fi
 fi
 
 # Configure hook in Claude Code settings
@@ -1242,10 +1411,12 @@ EOF
     return 1
 }
 
-if configure_hook "$CLAUDE_SETTINGS" "$HOOK_COMMAND"; then
-    success "Hook configured in settings.json"
-else
-    warn "Hook configuration requires manual setup"
+if [ "$INSTALL_CLAUDE" = true ]; then
+    if configure_hook "$CLAUDE_SETTINGS" "$HOOK_COMMAND"; then
+        success "Claude hook configured in settings.json"
+    else
+        warn "Claude hook configuration requires manual setup"
+    fi
 fi
 
 # === Add to PATH ===
