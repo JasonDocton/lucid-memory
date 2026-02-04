@@ -229,6 +229,307 @@ pub fn compute_surprise(
 	)
 }
 
+// ============================================================================
+// Working Memory
+// ============================================================================
+
+/// Configuration for working memory boost calculation.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsWorkingMemoryConfig {
+	/// Decay time constant in milliseconds (default: 4000)
+	pub decay_ms: Option<f64>,
+	/// Maximum boost multiplier (default: 1.0, giving range [1.0, 2.0])
+	pub max_boost: Option<f64>,
+}
+
+/// Compute working memory boost for a memory.
+///
+/// Returns boost in range [1.0, 1.0 + `max_boost`].
+/// Recently activated memories get higher boost.
+#[napi]
+pub fn compute_working_memory_boost(
+	activated_at_ms: f64,
+	current_time_ms: f64,
+	config: Option<JsWorkingMemoryConfig>,
+) -> f64 {
+	let core_config = config.map_or_else(
+		lucid_core::activation::WorkingMemoryConfig::default,
+		|c| lucid_core::activation::WorkingMemoryConfig {
+			decay_ms: c.decay_ms.unwrap_or(4000.0),
+			max_boost: c.max_boost.unwrap_or(1.0),
+		},
+	);
+	lucid_core::compute_working_memory_boost(activated_at_ms, current_time_ms, &core_config)
+}
+
+/// Batch compute working memory boosts.
+#[napi]
+pub fn compute_working_memory_boost_batch(
+	activated_at_ms: Vec<f64>,
+	current_time_ms: f64,
+	config: Option<JsWorkingMemoryConfig>,
+) -> Vec<f64> {
+	let core_config = config.map_or_else(
+		lucid_core::activation::WorkingMemoryConfig::default,
+		|c| lucid_core::activation::WorkingMemoryConfig {
+			decay_ms: c.decay_ms.unwrap_or(4000.0),
+			max_boost: c.max_boost.unwrap_or(1.0),
+		},
+	);
+	lucid_core::compute_working_memory_boost_batch(&activated_at_ms, current_time_ms, &core_config)
+}
+
+// ============================================================================
+// Session Decay Rate
+// ============================================================================
+
+/// Compute session-aware decay rate based on recency.
+///
+/// Returns decay rate in range [0.3, 0.5]:
+/// - Last 30 min: 0.3
+/// - Last 2 hours: 0.4
+/// - Last 24 hours: 0.45
+/// - Older: 0.5
+#[napi]
+pub fn compute_session_decay_rate(last_access_ms: f64, current_time_ms: f64) -> f64 {
+	lucid_core::compute_session_decay_rate(last_access_ms, current_time_ms)
+}
+
+/// Batch compute session-aware decay rates.
+#[napi]
+pub fn compute_session_decay_rate_batch(last_access_ms: Vec<f64>, current_time_ms: f64) -> Vec<f64> {
+	lucid_core::compute_session_decay_rate_batch(&last_access_ms, current_time_ms)
+}
+
+// ============================================================================
+// Instance Noise / Encoding Strength
+// ============================================================================
+
+/// Configuration for instance noise calculation.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsInstanceNoiseConfig {
+	/// Minimum encoding strength (default: 0.3)
+	pub encoding_base: Option<f64>,
+	/// Contribution from attention (default: 0.2)
+	pub attention_weight: Option<f64>,
+	/// Contribution from emotion (default: 0.2)
+	pub emotional_weight: Option<f64>,
+	/// Contribution from rehearsal (default: 0.3)
+	pub rehearsal_weight: Option<f64>,
+	/// Max rehearsal count before diminishing returns (default: 10)
+	pub max_rehearsal_count: Option<u32>,
+	/// Base noise parameter (default: 0.25)
+	pub noise_base: Option<f64>,
+}
+
+/// Compute encoding strength for a memory.
+///
+/// Stronger encoding = more reliable retrieval.
+#[napi]
+pub fn compute_encoding_strength(
+	attention: f64,
+	emotional_weight: f64,
+	access_count: u32,
+	config: Option<JsInstanceNoiseConfig>,
+) -> f64 {
+	let core_config = js_instance_noise_config_to_core(config);
+	lucid_core::compute_encoding_strength(attention, emotional_weight, access_count, &core_config)
+}
+
+/// Compute per-memory noise parameter from encoding strength.
+///
+/// Stronger encoding = lower noise.
+#[napi]
+pub fn compute_instance_noise(encoding_strength: f64, noise_base: f64) -> f64 {
+	lucid_core::compute_instance_noise(encoding_strength, noise_base)
+}
+
+// ============================================================================
+// Association Decay
+// ============================================================================
+
+/// Configuration for association decay.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsAssociationDecayConfig {
+	/// Decay tau for fresh associations in days (default: 1/24 = 1 hour)
+	pub tau_fresh_days: Option<f64>,
+	/// Decay tau for consolidating associations in days (default: 1)
+	pub tau_consolidating_days: Option<f64>,
+	/// Decay tau for consolidated associations in days (default: 30)
+	pub tau_consolidated_days: Option<f64>,
+	/// Decay tau for reconsolidating associations in days (default: 7)
+	pub tau_reconsolidating_days: Option<f64>,
+	/// Strength boost when co-accessed (default: 0.05)
+	pub reinforcement_boost: Option<f64>,
+	/// Prune threshold (default: 0.1)
+	pub prune_threshold: Option<f64>,
+}
+
+/// Compute decayed association strength.
+///
+/// state: "fresh", "consolidating", "consolidated", "reconsolidating"
+#[napi]
+pub fn compute_association_decay(
+	initial_strength: f64,
+	days_since_reinforced: f64,
+	state: String,
+	config: Option<JsAssociationDecayConfig>,
+) -> f64 {
+	let core_config = js_assoc_decay_config_to_core(config);
+	let core_state = parse_association_state(&state);
+	lucid_core::compute_association_decay(initial_strength, days_since_reinforced, core_state, &core_config)
+}
+
+/// Reinforce an association (co-access boost).
+#[napi]
+pub fn reinforce_association(current_strength: f64, config: Option<JsAssociationDecayConfig>) -> f64 {
+	let core_config = js_assoc_decay_config_to_core(config);
+	lucid_core::reinforce_association(current_strength, &core_config)
+}
+
+/// Check if an association should be pruned.
+#[napi]
+pub fn should_prune_association(strength: f64, config: Option<JsAssociationDecayConfig>) -> bool {
+	let core_config = js_assoc_decay_config_to_core(config);
+	lucid_core::should_prune_association(strength, &core_config)
+}
+
+// ============================================================================
+// Temporal Spreading (Episodic Memory)
+// ============================================================================
+
+/// Configuration for temporal spreading.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsTemporalSpreadingConfig {
+	/// Forward link strength multiplier (default: 1.0)
+	pub forward_strength: Option<f64>,
+	/// Backward link strength multiplier (default: 0.7)
+	pub backward_strength: Option<f64>,
+	/// Distance decay rate (default: 0.3)
+	pub distance_decay_rate: Option<f64>,
+	/// Episode boost (default: 1.2)
+	pub episode_boost: Option<f64>,
+	/// Context persistence (default: 0.7)
+	pub context_persistence: Option<f64>,
+	/// Max temporal distance (default: 10)
+	pub max_temporal_distance: Option<u32>,
+}
+
+/// A temporal link between memories.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsTemporalLink {
+	pub source_position: u32,
+	pub target_position: u32,
+	pub source_memory: u32,
+	pub target_memory: u32,
+	pub forward_strength: f64,
+	pub backward_strength: f64,
+}
+
+/// Result of temporal spreading.
+#[napi(object)]
+pub struct JsTemporalSpreadingResult {
+	pub activations: Vec<f64>,
+	pub forward_activated: Vec<u32>,
+	pub backward_activated: Vec<u32>,
+}
+
+/// Temporal neighbor result.
+#[napi(object)]
+pub struct JsTemporalNeighbor {
+	pub memory_index: u32,
+	pub strength: f64,
+}
+
+/// Create temporal links for an episode.
+#[napi]
+pub fn create_episode_links(
+	event_memory_indices: Vec<u32>,
+	config: Option<JsTemporalSpreadingConfig>,
+) -> Vec<JsTemporalLink> {
+	let core_config = js_temporal_config_to_core(config);
+	let indices: Vec<usize> = event_memory_indices.iter().map(|&i| i as usize).collect();
+	let links = lucid_core::create_episode_links(&indices, &core_config);
+
+	links
+		.into_iter()
+		.map(|l| JsTemporalLink {
+			source_position: l.source_position as u32,
+			target_position: l.target_position as u32,
+			source_memory: l.source_memory as u32,
+			target_memory: l.target_memory as u32,
+			forward_strength: l.forward_strength,
+			backward_strength: l.backward_strength,
+		})
+		.collect()
+}
+
+/// Spread activation through temporal links.
+#[napi]
+pub fn spread_temporal_activation(
+	num_memories: u32,
+	temporal_links: Vec<JsTemporalLink>,
+	seed_memory: u32,
+	seed_activation: f64,
+	config: Option<JsTemporalSpreadingConfig>,
+) -> JsTemporalSpreadingResult {
+	let core_config = js_temporal_config_to_core(config);
+	let core_links: Vec<lucid_core::TemporalLink> = temporal_links
+		.into_iter()
+		.map(js_temporal_link_to_core)
+		.collect();
+
+	let result = lucid_core::spread_temporal_activation(
+		num_memories as usize,
+		&core_links,
+		seed_memory as usize,
+		seed_activation,
+		&core_config,
+	);
+
+	JsTemporalSpreadingResult {
+		activations: result.activations,
+		forward_activated: result.forward_activated.into_iter().map(|i| i as u32).collect(),
+		backward_activated: result.backward_activated.into_iter().map(|i| i as u32).collect(),
+	}
+}
+
+/// Find temporally adjacent memories.
+///
+/// direction: "before", "after", or "both"
+#[napi]
+pub fn find_temporal_neighbors(
+	temporal_links: Vec<JsTemporalLink>,
+	anchor_memory: u32,
+	direction: String,
+	limit: u32,
+) -> Vec<JsTemporalNeighbor> {
+	let core_links: Vec<lucid_core::TemporalLink> = temporal_links
+		.into_iter()
+		.map(js_temporal_link_to_core)
+		.collect();
+
+	let neighbors = lucid_core::find_temporal_neighbors(
+		&core_links,
+		anchor_memory as usize,
+		&direction,
+		limit as usize,
+	);
+
+	neighbors
+		.into_iter()
+		.map(|(m, s)| JsTemporalNeighbor {
+			memory_index: m as u32,
+			strength: s,
+		})
+		.collect()
+}
+
 /// Library version
 #[napi]
 pub fn version() -> String {
@@ -989,6 +1290,75 @@ fn parse_activity_type(s: &str) -> Option<ActivityType> {
 		"reviewing" => Some(ActivityType::Reviewing),
 		"unknown" => Some(ActivityType::Unknown),
 		_ => None,
+	}
+}
+
+fn js_instance_noise_config_to_core(
+	js: Option<JsInstanceNoiseConfig>,
+) -> lucid_core::activation::InstanceNoiseConfig {
+	js.map_or_else(lucid_core::activation::InstanceNoiseConfig::default, |c| {
+		let default = lucid_core::activation::InstanceNoiseConfig::default();
+		lucid_core::activation::InstanceNoiseConfig {
+			encoding_base: c.encoding_base.unwrap_or(default.encoding_base),
+			attention_weight: c.attention_weight.unwrap_or(default.attention_weight),
+			emotional_weight: c.emotional_weight.unwrap_or(default.emotional_weight),
+			rehearsal_weight: c.rehearsal_weight.unwrap_or(default.rehearsal_weight),
+			max_rehearsal_count: c.max_rehearsal_count.unwrap_or(default.max_rehearsal_count),
+			noise_base: c.noise_base.unwrap_or(default.noise_base),
+		}
+	})
+}
+
+fn js_assoc_decay_config_to_core(
+	js: Option<JsAssociationDecayConfig>,
+) -> lucid_core::activation::AssociationDecayConfig {
+	js.map_or_else(lucid_core::activation::AssociationDecayConfig::default, |c| {
+		let default = lucid_core::activation::AssociationDecayConfig::default();
+		lucid_core::activation::AssociationDecayConfig {
+			tau_fresh_days: c.tau_fresh_days.unwrap_or(default.tau_fresh_days),
+			tau_consolidating_days: c.tau_consolidating_days.unwrap_or(default.tau_consolidating_days),
+			tau_consolidated_days: c.tau_consolidated_days.unwrap_or(default.tau_consolidated_days),
+			tau_reconsolidating_days: c.tau_reconsolidating_days.unwrap_or(default.tau_reconsolidating_days),
+			reinforcement_boost: c.reinforcement_boost.unwrap_or(default.reinforcement_boost),
+			prune_threshold: c.prune_threshold.unwrap_or(default.prune_threshold),
+		}
+	})
+}
+
+fn parse_association_state(s: &str) -> lucid_core::activation::AssociationState {
+	match s.to_lowercase().as_str() {
+		"fresh" => lucid_core::activation::AssociationState::Fresh,
+		"consolidating" => lucid_core::activation::AssociationState::Consolidating,
+		"consolidated" => lucid_core::activation::AssociationState::Consolidated,
+		"reconsolidating" => lucid_core::activation::AssociationState::Reconsolidating,
+		_ => lucid_core::activation::AssociationState::Fresh,
+	}
+}
+
+fn js_temporal_config_to_core(
+	js: Option<JsTemporalSpreadingConfig>,
+) -> lucid_core::spreading::TemporalSpreadingConfig {
+	js.map_or_else(lucid_core::spreading::TemporalSpreadingConfig::default, |c| {
+		let default = lucid_core::spreading::TemporalSpreadingConfig::default();
+		lucid_core::spreading::TemporalSpreadingConfig {
+			forward_strength: c.forward_strength.unwrap_or(default.forward_strength),
+			backward_strength: c.backward_strength.unwrap_or(default.backward_strength),
+			distance_decay_rate: c.distance_decay_rate.unwrap_or(default.distance_decay_rate),
+			episode_boost: c.episode_boost.unwrap_or(default.episode_boost),
+			context_persistence: c.context_persistence.unwrap_or(default.context_persistence),
+			max_temporal_distance: c.max_temporal_distance.unwrap_or(default.max_temporal_distance as u32) as usize,
+		}
+	})
+}
+
+const fn js_temporal_link_to_core(js: JsTemporalLink) -> lucid_core::spreading::TemporalLink {
+	lucid_core::spreading::TemporalLink {
+		source_position: js.source_position as usize,
+		target_position: js.target_position as usize,
+		source_memory: js.source_memory as usize,
+		target_memory: js.target_memory as usize,
+		forward_strength: js.forward_strength,
+		backward_strength: js.backward_strength,
 	}
 }
 

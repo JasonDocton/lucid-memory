@@ -310,6 +310,330 @@ pub fn compute_pagerank(
 	ranks
 }
 
+// ============================================================================
+// Temporal Spreading (Episodic Memory - TCM)
+// ============================================================================
+
+/// Configuration for temporal spreading activation.
+/// Based on Temporal Context Model (Howard & Kahana 2002).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TemporalSpreadingConfig {
+	/// Forward temporal link strength multiplier (A→B, later in sequence)
+	pub forward_strength: f64,
+	/// Backward temporal link strength multiplier (B→A, earlier in sequence)
+	/// Typically less than forward per TCM asymmetry
+	pub backward_strength: f64,
+	/// Decay rate for temporal link strength with position distance
+	pub distance_decay_rate: f64,
+	/// Activation boost for memories linked via episode
+	pub episode_boost: f64,
+	/// TCM context persistence parameter (beta)
+	pub context_persistence: f64,
+	/// Maximum temporal distance (positions) to consider
+	pub max_temporal_distance: usize,
+}
+
+impl Default for TemporalSpreadingConfig {
+	fn default() -> Self {
+		Self {
+			forward_strength: 1.0,
+			backward_strength: 0.7, // Asymmetric per TCM
+			distance_decay_rate: 0.3,
+			episode_boost: 1.2,
+			context_persistence: 0.7,
+			max_temporal_distance: 10,
+		}
+	}
+}
+
+/// A temporal link between two memories within an episode.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TemporalLink {
+	/// Source event index (within episode)
+	pub source_position: usize,
+	/// Target event index (within episode)
+	pub target_position: usize,
+	/// Memory index for source
+	pub source_memory: usize,
+	/// Memory index for target
+	pub target_memory: usize,
+	/// Forward link strength (source → target)
+	pub forward_strength: f64,
+	/// Backward link strength (target → source)
+	pub backward_strength: f64,
+}
+
+/// Result of temporal spreading activation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TemporalSpreadingResult {
+	/// Activation values for each memory (memory index → activation)
+	pub activations: Vec<f64>,
+	/// Which memories were activated via forward links
+	pub forward_activated: Vec<usize>,
+	/// Which memories were activated via backward links
+	pub backward_activated: Vec<usize>,
+}
+
+/// Compute temporal link strength based on position distance.
+///
+/// `strength = base × e^(-distance × decay_rate)`
+///
+/// Adjacent events have strongest links, distant events have weaker links.
+#[inline]
+#[must_use]
+pub fn compute_temporal_link_strength(
+	base_strength: f64,
+	position_distance: usize,
+	config: &TemporalSpreadingConfig,
+) -> f64 {
+	#[allow(clippy::cast_precision_loss)]
+	let distance = position_distance as f64;
+	base_strength * (-distance * config.distance_decay_rate).exp()
+}
+
+/// Create temporal links for an episode.
+///
+/// Creates forward and backward links between consecutive events,
+/// with strength decaying over distance.
+#[must_use]
+pub fn create_episode_links(
+	event_memory_indices: &[usize],
+	config: &TemporalSpreadingConfig,
+) -> Vec<TemporalLink> {
+	let mut links = Vec::new();
+	let n = event_memory_indices.len();
+
+	if n < 2 {
+		return links;
+	}
+
+	// Create links between events within max temporal distance
+	for i in 0..n {
+		for j in (i + 1)..n.min(i + config.max_temporal_distance + 1) {
+			let distance = j - i;
+
+			let forward = compute_temporal_link_strength(
+				config.forward_strength,
+				distance,
+				config,
+			);
+			let backward = compute_temporal_link_strength(
+				config.backward_strength,
+				distance,
+				config,
+			);
+
+			links.push(TemporalLink {
+				source_position: i,
+				target_position: j,
+				source_memory: event_memory_indices[i],
+				target_memory: event_memory_indices[j],
+				forward_strength: forward,
+				backward_strength: backward,
+			});
+		}
+	}
+
+	links
+}
+
+/// Spread activation through temporal links.
+///
+/// Given a seed memory within an episode, spreads activation to
+/// temporally adjacent memories. Forward links (to later events)
+/// are stronger than backward links (to earlier events) per TCM.
+///
+/// # Arguments
+///
+/// * `num_memories` - Total number of memories
+/// * `temporal_links` - Links from `create_episode_links`
+/// * `seed_memory` - The activated memory index
+/// * `seed_activation` - Initial activation value
+/// * `config` - Temporal spreading configuration
+///
+/// # Returns
+///
+/// Temporal spreading result with activations and which memories were reached.
+#[must_use]
+pub fn spread_temporal_activation(
+	num_memories: usize,
+	temporal_links: &[TemporalLink],
+	seed_memory: usize,
+	seed_activation: f64,
+	config: &TemporalSpreadingConfig,
+) -> TemporalSpreadingResult {
+	let mut activations = vec![0.0; num_memories];
+	let mut forward_activated = Vec::new();
+	let mut backward_activated = Vec::new();
+
+	if seed_memory >= num_memories {
+		return TemporalSpreadingResult {
+			activations,
+			forward_activated,
+			backward_activated,
+		};
+	}
+
+	// Set seed activation
+	activations[seed_memory] = seed_activation;
+
+	// Spread through temporal links
+	for link in temporal_links {
+		// Forward: source → target (seed is source, activate target)
+		if link.source_memory == seed_memory && link.target_memory < num_memories {
+			let spread = seed_activation * link.forward_strength * config.episode_boost;
+			activations[link.target_memory] += spread;
+			if !forward_activated.contains(&link.target_memory) {
+				forward_activated.push(link.target_memory);
+			}
+		}
+
+		// Backward: target → source (seed is target, activate source)
+		if link.target_memory == seed_memory && link.source_memory < num_memories {
+			let spread = seed_activation * link.backward_strength * config.episode_boost;
+			activations[link.source_memory] += spread;
+			if !backward_activated.contains(&link.source_memory) {
+				backward_activated.push(link.source_memory);
+			}
+		}
+	}
+
+	// Sort by position for predictable output
+	forward_activated.sort_unstable();
+	backward_activated.sort_unstable();
+
+	TemporalSpreadingResult {
+		activations,
+		forward_activated,
+		backward_activated,
+	}
+}
+
+/// Spread activation through multiple episodes.
+///
+/// Handles case where a memory appears in multiple episodes.
+#[must_use]
+pub fn spread_temporal_activation_multi(
+	num_memories: usize,
+	episode_links: &[Vec<TemporalLink>],
+	seed_memory: usize,
+	seed_activation: f64,
+	config: &TemporalSpreadingConfig,
+) -> TemporalSpreadingResult {
+	let mut combined_activations = vec![0.0; num_memories];
+	let mut all_forward = Vec::new();
+	let mut all_backward = Vec::new();
+
+	for links in episode_links {
+		// Check if seed memory is in this episode
+		let in_episode = links.iter().any(|l| {
+			l.source_memory == seed_memory || l.target_memory == seed_memory
+		});
+
+		if in_episode {
+			let result = spread_temporal_activation(
+				num_memories,
+				links,
+				seed_memory,
+				seed_activation,
+				config,
+			);
+
+			// Combine activations (take max, don't sum to avoid over-boosting)
+			for (i, &a) in result.activations.iter().enumerate() {
+				if a > combined_activations[i] {
+					combined_activations[i] = a;
+				}
+			}
+
+			for m in result.forward_activated {
+				if !all_forward.contains(&m) {
+					all_forward.push(m);
+				}
+			}
+
+			for m in result.backward_activated {
+				if !all_backward.contains(&m) {
+					all_backward.push(m);
+				}
+			}
+		}
+	}
+
+	all_forward.sort_unstable();
+	all_backward.sort_unstable();
+
+	TemporalSpreadingResult {
+		activations: combined_activations,
+		forward_activated: all_forward,
+		backward_activated: all_backward,
+	}
+}
+
+/// Find temporally adjacent memories ("what was I working on before/after X?").
+///
+/// Returns memory indices sorted by temporal proximity.
+///
+/// # Arguments
+///
+/// * `temporal_links` - Links from `create_episode_links`
+/// * `anchor_memory` - The reference memory
+/// * `direction` - "before" (backward), "after" (forward), or "both"
+/// * `limit` - Maximum memories to return
+#[must_use]
+pub fn find_temporal_neighbors(
+	temporal_links: &[TemporalLink],
+	anchor_memory: usize,
+	direction: &str,
+	limit: usize,
+) -> Vec<(usize, f64)> {
+	let mut neighbors: Vec<(usize, f64, usize)> = Vec::new(); // (memory, strength, distance)
+
+	for link in temporal_links {
+		match direction {
+			"before" | "backward" => {
+				// Looking for memories BEFORE anchor (anchor is target)
+				if link.target_memory == anchor_memory {
+					let distance = link.target_position - link.source_position;
+					neighbors.push((link.source_memory, link.backward_strength, distance));
+				}
+			}
+			"after" | "forward" => {
+				// Looking for memories AFTER anchor (anchor is source)
+				if link.source_memory == anchor_memory {
+					let distance = link.target_position - link.source_position;
+					neighbors.push((link.target_memory, link.forward_strength, distance));
+				}
+			}
+			_ => {
+				// Both directions
+				if link.target_memory == anchor_memory {
+					let distance = link.target_position - link.source_position;
+					neighbors.push((link.source_memory, link.backward_strength, distance));
+				}
+				if link.source_memory == anchor_memory {
+					let distance = link.target_position - link.source_position;
+					neighbors.push((link.target_memory, link.forward_strength, distance));
+				}
+			}
+		}
+	}
+
+	// Sort by distance (closest first), then by strength (highest first)
+	neighbors.sort_by(|a, b| {
+		a.2.cmp(&b.2).then_with(|| {
+			b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+		})
+	});
+
+	// Return (memory, strength) pairs
+	neighbors
+		.into_iter()
+		.take(limit)
+		.map(|(m, s, _)| (m, s))
+		.collect()
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -395,5 +719,93 @@ mod tests {
 		for r in &ranks {
 			assert!((r - avg).abs() < 0.01);
 		}
+	}
+
+	// Temporal Spreading tests
+
+	#[test]
+	fn test_temporal_link_strength_decay() {
+		let config = TemporalSpreadingConfig::default();
+
+		let adjacent = compute_temporal_link_strength(1.0, 1, &config);
+		let distant = compute_temporal_link_strength(1.0, 5, &config);
+
+		// Adjacent should be stronger than distant
+		assert!(adjacent > distant);
+		// Adjacent with decay_rate=0.3 should be ~0.74
+		assert!((adjacent - 0.74).abs() < 0.01);
+	}
+
+	#[test]
+	fn test_create_episode_links() {
+		let config = TemporalSpreadingConfig::default();
+		// Episode with 3 events: memories 10, 20, 30
+		let links = create_episode_links(&[10, 20, 30], &config);
+
+		// Should have links: 10→20, 10→30, 20→30
+		assert_eq!(links.len(), 3);
+
+		// Check forward > backward (TCM asymmetry)
+		for link in &links {
+			assert!(link.forward_strength > link.backward_strength);
+		}
+	}
+
+	#[test]
+	fn test_spread_temporal_activation() {
+		let config = TemporalSpreadingConfig::default();
+		// Episode: memories 0, 1, 2
+		let links = create_episode_links(&[0, 1, 2], &config);
+
+		// Activate middle memory (1)
+		let result = spread_temporal_activation(3, &links, 1, 1.0, &config);
+
+		// Memory 1 should have seed activation
+		assert!(result.activations[1] > 0.0);
+
+		// Forward spread to memory 2
+		assert!(result.activations[2] > 0.0);
+		assert!(result.forward_activated.contains(&2));
+
+		// Backward spread to memory 0
+		assert!(result.activations[0] > 0.0);
+		assert!(result.backward_activated.contains(&0));
+
+		// Forward should be stronger than backward
+		assert!(result.activations[2] > result.activations[0]);
+	}
+
+	#[test]
+	fn test_find_temporal_neighbors_before() {
+		let config = TemporalSpreadingConfig::default();
+		// Episode: memories 0, 1, 2, 3
+		let links = create_episode_links(&[0, 1, 2, 3], &config);
+
+		// Find memories BEFORE memory 2
+		let before = find_temporal_neighbors(&links, 2, "before", 10);
+
+		// Should find 0 and 1 (both come before 2)
+		let memory_ids: Vec<usize> = before.iter().map(|(m, _)| *m).collect();
+		assert!(memory_ids.contains(&0));
+		assert!(memory_ids.contains(&1));
+		// Should NOT contain 3 (comes after)
+		assert!(!memory_ids.contains(&3));
+	}
+
+	#[test]
+	fn test_find_temporal_neighbors_after() {
+		let config = TemporalSpreadingConfig::default();
+		// Episode: memories 0, 1, 2, 3
+		let links = create_episode_links(&[0, 1, 2, 3], &config);
+
+		// Find memories AFTER memory 1
+		let after = find_temporal_neighbors(&links, 1, "after", 10);
+
+		// Should find 2 and 3 (both come after 1)
+		let memory_ids: Vec<usize> = after.iter().map(|(m, _)| *m).collect();
+		assert!(memory_ids.contains(&2));
+		assert!(memory_ids.contains(&3));
+		// Should NOT contain 0 (comes before)
+		assert!(!memory_ids.contains(&0));
 	}
 }

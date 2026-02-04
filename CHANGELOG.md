@@ -5,6 +5,51 @@ All notable changes to Lucid Memory will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+#### Rust Migration — Cognitive Computations
+
+Migrated all math-heavy cognitive computations from TypeScript to Rust for 100x performance and consistent behavior.
+
+**New Rust functions in `lucid-core`:**
+
+| Function | Purpose |
+|----------|---------|
+| `compute_working_memory_boost()` | WM boost with exponential decay (τ≈4s) |
+| `compute_session_decay_rate()` | Recency-based decay modulation (0.3-0.5) |
+| `compute_encoding_strength()` | MINERVA 2 instance-based encoding |
+| `compute_instance_noise()` | Per-memory noise for retrieval probability |
+| `compute_association_decay()` | Consolidation-state-dependent decay |
+| `reinforce_association()` | Co-access boost for associations |
+| `should_prune_association()` | Pruning threshold check |
+
+**Episodic Memory Foundation (0.5.0 prep):**
+
+| Function | Purpose |
+|----------|---------|
+| `create_episode_links()` | TCM-based temporal links with distance decay |
+| `spread_temporal_activation()` | Forward/backward asymmetric spreading |
+| `find_temporal_neighbors()` | "What was I working on before/after X?" queries |
+
+**The neuroscience:**
+
+- Forward links stronger than backward (1.0 vs 0.7) per TCM (Howard & Kahana 2002)
+- Distance decay: `strength = base × e^(-distance × 0.3)`
+- Episode boost: 1.2x for temporally linked memories
+
+### Changed
+
+- TypeScript now delegates to native Rust functions when available
+- All native calls properly guarded with `shouldUseNative && nativeModule`
+- Added `maxTemporalDistance` to `EpisodicMemoryConfig` (default: 10)
+
+### Fixed
+
+- Missing `shouldUseNative` guard in `createAutoAssociations()` cosine similarity call
+- `createdAt.getTime()` error (field is already a number, not Date)
+
 ## [0.4.0] - 2025-02-02
 
 ### Added

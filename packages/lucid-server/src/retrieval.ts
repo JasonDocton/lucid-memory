@@ -19,6 +19,11 @@
  */
 
 import {
+	ActivationConfig,
+	SessionConfig,
+	WorkingMemoryConfig,
+} from "./config.ts"
+import {
 	EmbeddingClient,
 	type EmbeddingConfig,
 	type EmbeddingResult,
@@ -115,14 +120,14 @@ export interface RetrievalConfig {
 }
 
 export const DEFAULT_CONFIG: RetrievalConfig = {
-	maxResults: 10,
-	minProbability: 0.1,
-	decay: 0.5,
-	noise: 0.25,
-	threshold: 0.0,
-	probeWeight: 0.4,
-	baseLevelWeight: 0.3,
-	spreadingWeight: 0.3,
+	maxResults: ActivationConfig.maxResults,
+	minProbability: ActivationConfig.minProbability,
+	decay: ActivationConfig.baseLevelDecay,
+	noise: 0.25, // Instance noise base - will be per-memory when feature enabled
+	threshold: ActivationConfig.retrievalThreshold,
+	probeWeight: ActivationConfig.probeWeight,
+	baseLevelWeight: ActivationConfig.baseLevelWeight,
+	spreadingWeight: ActivationConfig.spreadingWeight,
 }
 
 /**
@@ -137,16 +142,16 @@ export class LucidRetrieval {
 	// Working Memory Buffer (Phase 1: Temporal Retrieval)
 	// Tracks recently activated memories with exponential decay
 	private workingMemory: Map<string, WorkingMemoryItem> = new Map()
-	private readonly wmCapacity = 7 // K≈4-7 items (Cowan, 2001)
-	private readonly wmDecayMs = 4000 // τ≈4 seconds
-	private readonly wmCutoffMultiplier = 5 // Remove after 5τ (20 seconds)
-	private readonly wmMaxBoost = 1.0 // Max boost added (1.0 + 1.0 = 2.0x)
+	private readonly wmCapacity = WorkingMemoryConfig.capacity
+	private readonly wmDecayMs = WorkingMemoryConfig.decayMs
+	private readonly wmCutoffMultiplier = WorkingMemoryConfig.cutoffMultiplier
+	private readonly wmMaxBoost = WorkingMemoryConfig.maxBoost
 
 	// Session Tracking (Phase 4: Temporal Retrieval)
 	// Caches current session ID per project to avoid repeated DB lookups
 	private sessionCache: Map<string, { sessionId: string; touchedAt: number }> =
 		new Map()
-	private readonly sessionCacheTtlMs = 60000 // Re-check session every minute
+	private readonly sessionCacheTtlMs = SessionConfig.cacheTtlMs
 	private sessionCacheLastPruneAt = 0 // LOW-6: Track last prune to avoid O(n) on every call
 	private readonly sessionCoAccessBoost = 1.5 // Memories accessed in same session get 1.5x boost
 
@@ -264,52 +269,48 @@ export class LucidRetrieval {
 	/**
 	 * Get WM boost for a specific memory.
 	 * Returns 1.0 (no boost) to 2.0 (max boost).
-	 * Implements exponential decay: e^(-t/τ)
+	 * Uses native Rust implementation when available.
 	 */
 	private getWorkingMemoryBoost(memoryId: string, now: number): number {
 		const item = this.workingMemory.get(memoryId)
 		if (!item) return 1.0
 
+		// Use native Rust implementation when available
+		if (shouldUseNative && nativeModule) {
+			return nativeModule.computeWorkingMemoryBoost(item.activatedAt, now, {
+				decayMs: this.wmDecayMs,
+				maxBoost: this.wmMaxBoost,
+			})
+		}
+
+		// TypeScript fallback
 		const age = now - item.activatedAt
-		// LOW-2: Guard against clock skew (negative age would cause boost > 2.0)
 		if (age < 0) return 1.0
-
-		// Exponential decay: e^(-t/τ) ranges from 1.0 (t=0) to ~0.007 (t=5τ)
 		const decayFactor = Math.exp(-age / this.wmDecayMs)
-
-		// Return boost in range [1.0, 2.0]
 		return 1.0 + this.wmMaxBoost * decayFactor
 	}
 
 	/**
 	 * Compute session-aware decay rate for a memory (Phase 2: Temporal Retrieval).
 	 * Recent memories decay slower (higher base-level activation).
-	 * Stays within ACT-R model by modulating d parameter, not activation directly.
+	 * Uses native Rust implementation when available.
 	 *
 	 * @param lastAccessMs - Timestamp of most recent access
 	 * @param now - Current timestamp
 	 * @returns Decay rate (0.3 to 0.5)
 	 */
 	private getSessionDecayRate(lastAccessMs: number, now: number): number {
+		// Use native Rust implementation when available
+		if (shouldUseNative && nativeModule) {
+			return nativeModule.computeSessionDecayRate(lastAccessMs, now)
+		}
+
+		// TypeScript fallback
 		const hoursAgo = (now - lastAccessMs) / 3600000
-
-		// Guard against future timestamps (clock skew, data corruption)
 		if (hoursAgo < 0) return 0.5
-
-		// Smooth decay rate based on recency
-		if (hoursAgo < 0.5) {
-			// Last 30 minutes: much slower decay → higher activation
-			return 0.3
-		}
-		if (hoursAgo < 2) {
-			// Last 2 hours: slower decay
-			return 0.4
-		}
-		if (hoursAgo < 24) {
-			// Last day: slightly slower
-			return 0.45
-		}
-		// Default ACT-R decay rate
+		if (hoursAgo < 0.5) return 0.3
+		if (hoursAgo < 2) return 0.4
+		if (hoursAgo < 24) return 0.45
 		return 0.5
 	}
 
@@ -442,7 +443,8 @@ export class LucidRetrieval {
 			const now = Date.now()
 			const candidates: RetrievalCandidate[] = filteredMemories.map(
 				(memory, _i) => {
-					const history = accessHistories[memoryIndexMap.get(memory.id) ?? -1] ?? []
+					const history =
+						accessHistories[memoryIndexMap.get(memory.id) ?? -1] ?? []
 					// Phase 2: Use session-aware decay rate
 					const lastAccess = history.length > 0 ? history[0] : 0
 					const decayRate = this.getSessionDecayRate(lastAccess, now)
@@ -491,7 +493,8 @@ export class LucidRetrieval {
 			const now = Date.now()
 			const candidates: RetrievalCandidate[] = filteredMemories.map(
 				(memory, _i) => {
-					const history = accessHistories[memoryIndexMap.get(memory.id) ?? -1] ?? []
+					const history =
+						accessHistories[memoryIndexMap.get(memory.id) ?? -1] ?? []
 					const lastAccess = history.length > 0 ? history[0] : 0
 					const decayRate = this.getSessionDecayRate(lastAccess, now)
 					const baseLevel =
@@ -903,7 +906,7 @@ export class LucidRetrieval {
 
 		// Filter to recent memories (created in last 30 min) excluding the new one
 		const recentMemories = memories.filter(
-			(m) => m.id !== memoryId && m.createdAt.getTime() > cutoff
+			(m) => m.id !== memoryId && m.createdAt > cutoff
 		)
 
 		if (recentMemories.length === 0) return
@@ -916,9 +919,10 @@ export class LucidRetrieval {
 			if (!recentEmbedding) continue
 
 			// Use native or TS cosine similarity
-			const similarity = nativeModule
-				? nativeModule.cosineSimilarity(embedding, recentEmbedding)
-				: tsCosineSimilarity(embedding, recentEmbedding)
+			const similarity =
+				shouldUseNative && nativeModule
+					? nativeModule.cosineSimilarity(embedding, recentEmbedding)
+					: tsCosineSimilarity(embedding, recentEmbedding)
 
 			if (similarity >= this.autoAssociationMinSimilarity) {
 				similarities.push({ id: recent.id, similarity })
