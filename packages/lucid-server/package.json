@@ -1,6 +1,6 @@
 {
 	"name": "lucid-server",
-	"version": "0.3.6",
+	"version": "0.3.7",
 	"description": "MCP server for Lucid Memory - Claude Code that actually remembers",
 	"type": "module",
 	"main": "src/index.ts",

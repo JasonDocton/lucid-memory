@@ -155,6 +155,12 @@ export class LucidRetrieval {
 		null
 	private readonly associationCacheTtlMs = 60000 // 60 second TTL (QW-2: reduces DB queries)
 
+	// Auto-association settings
+	// When a memory is stored, automatically link it to recent similar memories
+	private readonly autoAssociationLimit = 5 // Max associations to create per memory
+	private readonly autoAssociationMinSimilarity = 0.4 // Minimum similarity to create link
+	private readonly autoAssociationRecencyMs = 30 * 60 * 1000 // Only link to memories from last 30 min
+
 	constructor(storageConfig?: StorageConfig) {
 		this.storage = new LucidStorage(storageConfig)
 	}
@@ -803,7 +809,12 @@ export class LucidRetrieval {
 	}
 
 	/**
-	 * Store a memory with automatic embedding and gist generation.
+	 * Store a memory with automatic embedding, gist generation, and association creation.
+	 *
+	 * Auto-association: When a memory is stored, we automatically link it to
+	 * recent similar memories (last 30 min, similarity > 0.4). This enables
+	 * spreading activation to surface related context even when semantic
+	 * similarity alone wouldn't find it.
 	 */
 	async store(
 		content: string,
@@ -837,6 +848,13 @@ export class LucidRetrieval {
 					embedding.vector,
 					embedding.model
 				)
+
+				// Auto-associate with recent similar memories
+				await this.createAutoAssociations(
+					memory.id,
+					embedding.vector,
+					options.projectId
+				)
 			} catch (error) {
 				// Embedding failed, memory is still stored - will be processed later
 				console.error("[lucid] Embedding failed:", error)
@@ -844,6 +862,67 @@ export class LucidRetrieval {
 		}
 
 		return memory
+	}
+
+	/**
+	 * Automatically create associations between a new memory and recent similar memories.
+	 *
+	 * This enables spreading activation to work in practice:
+	 * - When you store memories about "Button.tsx" and "Button.module.css" in the same session,
+	 *   they get linked even though CSS has very different vocabulary than TypeScript.
+	 * - Later queries for "Button component" will find the CSS via spreading activation.
+	 *
+	 * Association strength is based on semantic similarity (0.4-1.0 → 0.4-1.0 strength).
+	 */
+	private async createAutoAssociations(
+		memoryId: string,
+		embedding: number[],
+		projectId?: string
+	): Promise<void> {
+		const now = Date.now()
+		const cutoff = now - this.autoAssociationRecencyMs
+
+		// Get recent memories with embeddings from the same project
+		const { memories } = this.storage.getAllForRetrieval(projectId)
+
+		// Filter to recent memories (created in last 30 min) excluding the new one
+		const recentMemories = memories.filter(
+			(m) => m.id !== memoryId && m.createdAt.getTime() > cutoff
+		)
+
+		if (recentMemories.length === 0) return
+
+		// Calculate similarities and create associations
+		const similarities: { id: string; similarity: number }[] = []
+
+		for (const recent of recentMemories) {
+			const recentEmbedding = this.storage.getEmbedding(recent.id)
+			if (!recentEmbedding) continue
+
+			// Use native or TS cosine similarity
+			const similarity = nativeModule
+				? nativeModule.cosineSimilarity(embedding, recentEmbedding)
+				: tsCosineSimilarity(embedding, recentEmbedding)
+
+			if (similarity >= this.autoAssociationMinSimilarity) {
+				similarities.push({ id: recent.id, similarity })
+			}
+		}
+
+		// Sort by similarity and take top N
+		similarities.sort((a, b) => b.similarity - a.similarity)
+		const topAssociations = similarities.slice(0, this.autoAssociationLimit)
+
+		// Create bidirectional associations
+		for (const { id: targetId, similarity } of topAssociations) {
+			// Use similarity as strength (already in 0.4-1.0 range due to threshold)
+			this.storage.associate(memoryId, targetId, similarity, "temporal")
+		}
+
+		// Invalidate association cache since we added new ones
+		if (topAssociations.length > 0) {
+			this.invalidateAssociationCache()
+		}
 	}
 
 	/**
