@@ -212,7 +212,12 @@ pub fn nonlinear_activation_batch(similarities: &[f64]) -> Vec<f64> {
 
 /// Combine all activation sources into total activation.
 ///
-/// `Total = (baseLevel + probeActivation + spreading) × emotionalMultiplier`
+/// Emotional weight modulates the probe activation (relevance signal),
+/// not the base-level activation (recency/frequency). This is cognitively
+/// plausible: emotion affects how strongly a memory resonates with a cue,
+/// not how recently it was accessed.
+///
+/// `Total = baseLevel + (probeActivation × emotionalMultiplier) + spreading`
 #[must_use]
 pub fn combine_activations(
 	base_level: f64,
@@ -220,7 +225,8 @@ pub fn combine_activations(
 	spreading_activation: f64,
 	emotional_weight: f64,
 ) -> ActivationBreakdown {
-	// Emotional weight acts as a multiplier (range: 0.5 to 1.5)
+	// Emotional weight modulates probe activation (range: 0.5 to 1.5)
+	// This ensures emotional memories resonate more strongly with matching cues
 	let emotional_multiplier = 1.0 + (emotional_weight - 0.5);
 
 	// Handle -infinity base level
@@ -230,11 +236,14 @@ pub fn combine_activations(
 		-10.0
 	};
 
-	let total = (effective_base + probe_activation + spreading_activation) * emotional_multiplier;
+	// Apply emotional modulation to probe activation only
+	// Base-level (recency/frequency) is independent of emotional salience
+	let modulated_probe = probe_activation * emotional_multiplier;
+	let total = effective_base + modulated_probe + spreading_activation;
 
 	ActivationBreakdown {
 		base_level: effective_base,
-		probe_activation,
+		probe_activation: modulated_probe,
 		spreading: spreading_activation,
 		emotional_weight,
 		total,

@@ -20,7 +20,10 @@
 		"fmt:rust": "cargo fmt",
 		"fmt:ts": "biome format --write .",
 		"check": "bun run lint && bun run test",
-		"clean": "cargo clean && rm -rf node_modules ts/node_modules"
+		"clean": "cargo clean && rm -rf node_modules ts/node_modules",
+		"bench": "bun run bench:rust && bun run bench:quality",
+		"bench:rust": "cargo bench -p lucid-core",
+		"bench:quality": "bun run benchmarks/quality/index.ts"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.3.12",

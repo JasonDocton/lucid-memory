@@ -150,6 +150,7 @@ pub fn retrieve(input: &RetrievalInput<'_>, config: &RetrievalConfig) -> Vec<Ret
 		.collect();
 
 	// 5. Initial activation (before spreading)
+	// Emotional weight modulates probe activation only (not base-level)
 	let initial_activations: Vec<f64> = (0..n)
 		.map(|i| {
 			let base = if base_levels[i].is_finite() {
@@ -159,7 +160,7 @@ pub fn retrieve(input: &RetrievalInput<'_>, config: &RetrievalConfig) -> Vec<Ret
 			};
 			let emotional = input.emotional_weights.get(i).copied().unwrap_or(0.5);
 			let emotional_multiplier = 1.0 + (emotional - 0.5);
-			(base + probe_activations[i]) * emotional_multiplier
+			probe_activations[i].mul_add(emotional_multiplier, base)
 		})
 		.collect();
 
