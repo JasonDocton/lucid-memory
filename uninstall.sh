@@ -276,7 +276,8 @@ fi
 PLIST_FILE="$HOME/Library/LaunchAgents/com.lucid.ollama.plist"
 if [ -f "$PLIST_FILE" ]; then
     info "Removing Ollama LaunchAgent..."
-    launchctl unload "$PLIST_FILE" 2>/dev/null || true
+    launchctl bootout "gui/$(id -u)" "$PLIST_FILE" 2>/dev/null || \
+        launchctl unload "$PLIST_FILE" 2>/dev/null || true
     rm -f "$PLIST_FILE"
     success "LaunchAgent removed"
 fi

@@ -17,6 +17,16 @@
 
 set -e
 
+# Cleanup on exit: restore cursor, remove temp directory
+INSTALL_TEMP_DIR=""
+cleanup() {
+    tput cnorm 2>/dev/null || true
+    if [ -n "$INSTALL_TEMP_DIR" ] && [ -d "$INSTALL_TEMP_DIR" ]; then
+        rm -rf "$INSTALL_TEMP_DIR"
+    fi
+}
+trap cleanup EXIT
+
 # Detect if we're running interactively (stdin is a terminal)
 # When piped via curl | bash, stdin is NOT a terminal, so we use defaults
 INTERACTIVE=false
@@ -147,10 +157,10 @@ get_available_space() {
 # Check if JSON is valid
 validate_json() {
     if command -v python3 &> /dev/null; then
-        python3 -c "import json; json.load(open('$1'))" 2>/dev/null
+        python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$1" 2>/dev/null
         return $?
     elif command -v python &> /dev/null; then
-        python -c "import json; json.load(open('$1'))" 2>/dev/null
+        python -c "import json,sys; json.load(open(sys.argv[1]))" "$1" 2>/dev/null
         return $?
     elif command -v jq &> /dev/null; then
         jq empty "$1" 2>/dev/null
@@ -175,16 +185,17 @@ add_to_mcp_config() {
 
     # If python is available, use it
     if command -v python3 &> /dev/null; then
-        python3 << EOF
-import json
-with open('$config_file', 'r') as f:
+        python3 - "$config_file" "$server_path" << 'PYEOF'
+import json, sys
+config_file, server_path = sys.argv[1], sys.argv[2]
+with open(config_file, 'r') as f:
     config = json.load(f)
 if 'mcpServers' not in config:
     config['mcpServers'] = {}
-config['mcpServers']['lucid-memory'] = {'type': 'stdio', 'command': '$server_path', 'args': [], 'env': {'LUCID_CLIENT': 'claude'}}
-with open('$config_file', 'w') as f:
+config['mcpServers']['lucid-memory'] = {'type': 'stdio', 'command': server_path, 'args': [], 'env': {'LUCID_CLIENT': 'claude'}}
+with open(config_file, 'w') as f:
     json.dump(config, f, indent=2)
-EOF
+PYEOF
         return 0
     fi
 
@@ -249,7 +260,7 @@ ensure_ollama_running() {
     <string>com.lucid.ollama</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$(which ollama)</string>
+        <string>$(command -v ollama)</string>
         <string>serve</string>
     </array>
     <key>RunAtLoad</key>
@@ -263,7 +274,9 @@ ensure_ollama_running() {
 </dict>
 </plist>
 EOF
-            launchctl load "$plist_file" 2>/dev/null || true
+            # bootstrap is the modern API (macOS 10.10+), load is deprecated
+            launchctl bootstrap "gui/$(id -u)" "$plist_file" 2>/dev/null || \
+                launchctl load "$plist_file" 2>/dev/null || true
         fi
     else
         # Linux - use systemd if available
@@ -444,8 +457,10 @@ echo -e "${BOLD}The following will be installed:${NC}"
 echo -e "$INSTALL_LIST"
 echo ""
 
-AVAILABLE_GB=$((AVAILABLE_SPACE / 1048576))
-echo -e "${DIM}Disk space available: ${AVAILABLE_GB}GB${NC}"
+if [ -n "$AVAILABLE_SPACE" ] && [ "$AVAILABLE_SPACE" -gt 0 ] 2>/dev/null; then
+    AVAILABLE_GB=$((AVAILABLE_SPACE / 1048576))
+    echo -e "${DIM}Disk space available: ${AVAILABLE_GB}GB${NC}"
+fi
 echo ""
 
 # Ask for confirmation
@@ -496,7 +511,8 @@ if [ "$NEED_BUN" = true ]; then
             "Please install Bun manually: https://bun.sh"
     fi
 fi
-success "Bun $(bun --version)"
+BUN_VER=$(bun --version 2>/dev/null || echo "unknown")
+success "Bun $BUN_VER"
 
 # Install ffmpeg if needed
 if [ "$NEED_FFMPEG" = true ]; then
@@ -671,6 +687,7 @@ echo ""
 echo "Downloading Lucid Memory..."
 
 TEMP_DIR=$(mktemp -d)
+INSTALL_TEMP_DIR="$TEMP_DIR"
 cd "$TEMP_DIR"
 
 # Clone the repository (shallow clone for speed)
@@ -1197,7 +1214,7 @@ mkdir -p "$LUCID_MODELS"
 if [ ! -f "$LUCID_MODELS/ggml-base.en.bin" ]; then
     echo ""
     echo "Downloading Whisper model for video transcription (74MB)..."
-    if curl -L -o "$LUCID_MODELS/ggml-base.en.bin" \
+    if curl -fL -o "$LUCID_MODELS/ggml-base.en.bin" \
       "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" 2>/dev/null; then
         success "Whisper model downloaded"
     else
@@ -1436,33 +1453,22 @@ configure_hook() {
 
     # If python is available, use it
     if command -v python3 &> /dev/null; then
-        python3 << EOF
-import json
-import os
-
-settings_file = '$settings_file'
-hook_cmd = '$hook_cmd'
-
+        python3 - "$settings_file" "$hook_cmd" << 'PYEOF'
+import json, sys, os
+settings_file, hook_cmd = sys.argv[1], sys.argv[2]
 if os.path.exists(settings_file):
     with open(settings_file, 'r') as f:
         config = json.load(f)
 else:
     config = {}
-
 if 'hooks' not in config:
     config['hooks'] = {}
-
 config['hooks']['UserPromptSubmit'] = [
-    {
-        'hooks': [
-            {'type': 'command', 'command': hook_cmd}
-        ]
-    }
+    {'hooks': [{'type': 'command', 'command': hook_cmd}]}
 ]
-
 with open(settings_file, 'w') as f:
     json.dump(config, f, indent=2)
-EOF
+PYEOF
         return 0
     fi
 
