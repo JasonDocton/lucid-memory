@@ -301,46 +301,42 @@ if ($NeedYtdlp) {
     Write-Success "yt-dlp already installed"
 }
 
-# Install whisper if needed
+# Install whisper if needed (optional — native Rust module handles transcription via whisper.cpp)
 if ($NeedWhisper) {
-    Write-Host "Installing OpenAI Whisper (this may take a few minutes)..."
-    if ($NeedPip) {
-        Write-Fail "pip is not installed" "Please install Python first: https://www.python.org/downloads/`nMake sure to check 'Add Python to PATH' during installation."
-    }
-    $WhisperInstalled = $false
-    try {
-        if (Get-Command pip3 -ErrorAction SilentlyContinue) {
-            pip3 install --user openai-whisper 2>&1 | Out-Null
-            $WhisperInstalled = $true
-        } elseif (Get-Command pip -ErrorAction SilentlyContinue) {
-            pip install --user openai-whisper 2>&1 | Out-Null
-            $WhisperInstalled = $true
-        } else {
-            # Fallback: use pip as a Python module
-            try { python -m pip install --user openai-whisper 2>&1 | Out-Null; $WhisperInstalled = $true } catch {}
-            if (-not $WhisperInstalled) {
-                try { py -m pip install --user openai-whisper 2>&1 | Out-Null; $WhisperInstalled = $true } catch {}
+    if (-not $NeedPip) {
+        Write-Host "Installing OpenAI Whisper (this may take a few minutes)..."
+        $WhisperInstalled = $false
+        try {
+            if (Get-Command pip3 -ErrorAction SilentlyContinue) {
+                pip3 install --user openai-whisper 2>&1 | Out-Null
+                $WhisperInstalled = $true
+            } elseif (Get-Command pip -ErrorAction SilentlyContinue) {
+                pip install --user openai-whisper 2>&1 | Out-Null
+                $WhisperInstalled = $true
+            } else {
+                try { python -m pip install --user openai-whisper 2>&1 | Out-Null; $WhisperInstalled = $true } catch {}
+                if (-not $WhisperInstalled) {
+                    try { py -m pip install --user openai-whisper 2>&1 | Out-Null; $WhisperInstalled = $true } catch {}
+                }
+            }
+            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+        } catch {}
+
+        foreach ($pyver in @("313", "312", "311", "310", "39", "38")) {
+            $PyScriptsPath = "$env:APPDATA\Python\Python$pyver\Scripts"
+            if (Test-Path $PyScriptsPath) {
+                $env:PATH = "$PyScriptsPath;$env:PATH"
+                break
             }
         }
-        # Refresh PATH
-        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
-    } catch {
-        # Might throw but still install
-    }
 
-    # Add Python Scripts to PATH for detection
-    foreach ($pyver in @("313", "312", "311", "310", "39", "38")) {
-        $PyScriptsPath = "$env:APPDATA\Python\Python$pyver\Scripts"
-        if (Test-Path $PyScriptsPath) {
-            $env:PATH = "$PyScriptsPath;$env:PATH"
-            break
+        if ($WhisperInstalled -or (Get-Command whisper -ErrorAction SilentlyContinue)) {
+            Write-Success "Whisper CLI installed"
+        } else {
+            Write-Warn "Whisper CLI not installed (video transcription will use native module or be skipped)"
         }
-    }
-
-    if ($WhisperInstalled -or (Get-Command whisper -ErrorAction SilentlyContinue)) {
-        Write-Success "Whisper installed"
     } else {
-        Write-Fail "Whisper installation failed" "Please install manually:`n  pip install --user openai-whisper`n`nNote: Whisper requires Python 3.8+ and may take several minutes."
+        Write-Warn "Whisper CLI skipped (pip not found — video transcription will use native module or be skipped)"
     }
 } else {
     Write-Success "Whisper already installed"

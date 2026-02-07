@@ -592,46 +592,41 @@ else
     success "yt-dlp already installed"
 fi
 
-# Install whisper if needed
+# Install whisper if needed (optional — native Rust module handles transcription via whisper.cpp)
 if [ "$NEED_WHISPER" = true ]; then
-    echo "Installing OpenAI Whisper (this may take a few minutes)..."
+    if [ "$NEED_PIP" = false ]; then
+        echo "Installing OpenAI Whisper (this may take a few minutes)..."
 
-    # Check for pip
-    if [ "$NEED_PIP" = true ]; then
-        fail "pip is not installed" \
-            "Please install Python and pip first:\n  macOS: brew install python\n  Ubuntu/Debian: sudo apt install python3-pip\n  Fedora: sudo dnf install python3-pip"
-    fi
-
-    WHISPER_INSTALLED=false
-    if command -v pip3 &> /dev/null; then
-        if pip3 install --user openai-whisper; then
-            WHISPER_INSTALLED=true
-        fi
-    elif command -v pip &> /dev/null; then
-        if pip install --user openai-whisper; then
-            WHISPER_INSTALLED=true
-        fi
-    fi
-
-    # Add Python user bin to PATH (different locations on macOS vs Linux)
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS: ~/Library/Python/3.X/bin
-        for pyver in 3.13 3.12 3.11 3.10 3.9 3.8; do
-            if [ -d "$HOME/Library/Python/$pyver/bin" ]; then
-                export PATH="$HOME/Library/Python/$pyver/bin:$PATH"
-                break
+        WHISPER_INSTALLED=false
+        if command -v pip3 &> /dev/null; then
+            if pip3 install --user openai-whisper 2>/dev/null; then
+                WHISPER_INSTALLED=true
             fi
-        done
-    else
-        # Linux: ~/.local/bin
-        export PATH="$HOME/.local/bin:$PATH"
-    fi
+        elif command -v pip &> /dev/null; then
+            if pip install --user openai-whisper 2>/dev/null; then
+                WHISPER_INSTALLED=true
+            fi
+        fi
 
-    if [ "$WHISPER_INSTALLED" = true ] && command -v whisper &> /dev/null; then
-        success "Whisper installed"
+        # Add Python user bin to PATH (different locations on macOS vs Linux)
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            for pyver in 3.13 3.12 3.11 3.10 3.9 3.8; do
+                if [ -d "$HOME/Library/Python/$pyver/bin" ]; then
+                    export PATH="$HOME/Library/Python/$pyver/bin:$PATH"
+                    break
+                fi
+            done
+        else
+            export PATH="$HOME/.local/bin:$PATH"
+        fi
+
+        if [ "$WHISPER_INSTALLED" = true ] && command -v whisper &> /dev/null; then
+            success "Whisper CLI installed"
+        else
+            warn "Whisper CLI not installed (video transcription will use native module or be skipped)"
+        fi
     else
-        fail "Whisper installation failed" \
-            "Please install manually: pip install --user openai-whisper\n\nNote: Whisper requires Python 3.8+ and may take several minutes to install."
+        warn "Whisper CLI skipped (pip not found — video transcription will use native module or be skipped)"
     fi
 else
     success "Whisper already installed"
