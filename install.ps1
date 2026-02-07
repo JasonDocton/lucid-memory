@@ -729,12 +729,17 @@ switch ($EmbedChoice) {
             } catch {
                 Start-Sleep -Seconds 2
                 $Retries--
-                # After a few retries, try launching the desktop app as fallback
+                # After several retries, check if ollama serve died and try desktop app
                 if ($Retries -eq 10 -and -not $TriedDesktopApp) {
                     $TriedDesktopApp = $true
-                    $OllamaAppPath = "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"
-                    if (Test-Path $OllamaAppPath) {
-                        Start-Process -FilePath $OllamaAppPath -WindowStyle Minimized -ErrorAction SilentlyContinue
+                    $CliAlive = Get-Process -Name "ollama" -ErrorAction SilentlyContinue
+                    if (-not $CliAlive) {
+                        # CLI serve died — try desktop app as fallback (don't launch both
+                        # simultaneously or they'll fight for port 11434)
+                        $OllamaAppPath = "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"
+                        if (Test-Path $OllamaAppPath) {
+                            Start-Process -FilePath $OllamaAppPath -WindowStyle Minimized -ErrorAction SilentlyContinue
+                        }
                     }
                 }
             }

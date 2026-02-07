@@ -187,9 +187,24 @@ Write-Host ""
 $RemoveModel = Read-Host "  Remove Ollama embedding model (nomic-embed-text)? [y/N]"
 if ($RemoveModel -match "^[Yy]$") {
     if (Get-Command ollama -ErrorAction SilentlyContinue) {
-        Write-Info "Removing embedding model..."
-        cmd /c "ollama rm nomic-embed-text 2>&1" | Out-Null
-        Write-Success "Embedding model removed"
+        # ollama rm requires the service to be running
+        $OllamaUp = $false
+        try {
+            $null = Invoke-RestMethod -Uri "http://localhost:11434/api/tags" -TimeoutSec 2
+            $OllamaUp = $true
+        } catch {}
+
+        if ($OllamaUp) {
+            Write-Info "Removing embedding model..."
+            cmd /c "ollama rm nomic-embed-text 2>&1" | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success "Embedding model removed"
+            } else {
+                Write-Warn "Could not remove embedding model. Remove manually: ollama rm nomic-embed-text"
+            }
+        } else {
+            Write-Warn "Ollama service not running. To remove the model manually: ollama rm nomic-embed-text"
+        }
     }
 }
 
@@ -200,6 +215,8 @@ $ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyConti
 if ($ExistingTask) {
     Write-Info "Removing Ollama scheduled task..."
     try {
+        # Stop the task-launched ollama serve process before removing the task
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
         Write-Success "Scheduled task removed"
     } catch {
