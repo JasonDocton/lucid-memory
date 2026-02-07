@@ -648,14 +648,30 @@ switch ($EmbedChoice) {
 
         # Install Ollama if needed (detected earlier)
         if ($NeedOllama) {
-            Write-Host "Installing Ollama..."
+            Write-Host "Downloading Ollama installer (~200MB, this may take a minute)..."
             try {
-                # Download and run Ollama installer
                 $OllamaInstaller = "$env:TEMP\OllamaSetup.exe"
-                Invoke-WebRequest -UseBasicParsing -Uri "https://ollama.com/download/OllamaSetup.exe" -OutFile $OllamaInstaller
-                Write-Host "  The Ollama installer will open — please complete the setup wizard."
-                Start-Process -FilePath $OllamaInstaller -Wait
-                Remove-Item $OllamaInstaller -Force
+                # Use BITS for background download with progress, fall back to Invoke-WebRequest
+                $DownloadOk = $false
+                try {
+                    $BitsJob = Start-BitsTransfer -Source "https://ollama.com/download/OllamaSetup.exe" -Destination $OllamaInstaller -DisplayName "Ollama" -ErrorAction Stop
+                    $DownloadOk = $true
+                } catch {
+                    # BITS unavailable or failed — fall back
+                    Write-Host "  Downloading (no progress available)..." -ForegroundColor DarkGray
+                    Invoke-WebRequest -UseBasicParsing -Uri "https://ollama.com/download/OllamaSetup.exe" -OutFile $OllamaInstaller
+                    $DownloadOk = $true
+                }
+
+                if ($DownloadOk -and (Test-Path $OllamaInstaller)) {
+                    Write-Host "Installing Ollama (silent install)..."
+                    # /VERYSILENT skips the GUI wizard entirely
+                    $Proc = Start-Process -FilePath $OllamaInstaller -ArgumentList "/VERYSILENT" -Wait -PassThru
+                    if ($Proc.ExitCode -ne 0) {
+                        throw "Installer exited with code $($Proc.ExitCode)"
+                    }
+                    Remove-Item $OllamaInstaller -Force -ErrorAction SilentlyContinue
+                }
 
                 # Refresh PATH
                 $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
