@@ -618,6 +618,15 @@ Write-Host "Installing dependencies..."
 cmd /c "bun install 2>&1"
 $BunExit = $LASTEXITCODE
 
+# Retry once — Windows Defender can briefly lock newly-downloaded .node files,
+# causing EPERM when Bun tries to copy workspace packages
+if ($BunExit -ne 0) {
+    Write-Host "  Retrying package install..." -ForegroundColor DarkGray
+    Start-Sleep -Seconds 3
+    cmd /c "bun install 2>&1"
+    $BunExit = $LASTEXITCODE
+}
+
 if ($BunExit -ne 0 -and -not (Test-Path "node_modules")) {
     Write-Fail "Failed to install dependencies" "Bun package installation failed.`n`nTry running manually:`n  cd $LucidDir\server && bun install"
 }
@@ -679,8 +688,14 @@ switch ($EmbedChoice) {
                 if ($DownloadOk -and (Test-Path $OllamaInstaller)) {
                     Write-Host "Installing Ollama (silent install)..."
                     # /VERYSILENT skips the GUI wizard, /SUPPRESSMSGBOXES suppresses dialogs,
-                    # /SP- skips "This will install..." prompt
-                    $Proc = Start-Process -FilePath $OllamaInstaller -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /SP-" -PassThru
+                    # /SP- skips "This will install..." prompt.
+                    # -Verb RunAs requests elevation — Ollama installer needs admin.
+                    try {
+                        $Proc = Start-Process -FilePath $OllamaInstaller -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /SP-" -Verb RunAs -PassThru
+                    } catch {
+                        # User declined UAC prompt
+                        throw "Ollama installer requires administrator privileges"
+                    }
                     # The Ollama installer auto-launches the desktop app after install,
                     # which prevents the installer process from exiting. Poll and kill
                     # the auto-launched app so the installer can complete.
