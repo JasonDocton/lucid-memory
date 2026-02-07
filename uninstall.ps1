@@ -118,7 +118,7 @@ Write-Host ""
 if (Test-Path $McpConfig) {
     Write-Info "Removing MCP server config..."
     try {
-        $Config = Get-Content $McpConfig | ConvertFrom-Json
+        $Config = Get-Content $McpConfig -Raw | ConvertFrom-Json
         if ($Config.mcpServers -and $Config.mcpServers.'lucid-memory') {
             $Config.mcpServers.PSObject.Properties.Remove('lucid-memory')
             $Utf8NoBom = New-Object System.Text.UTF8Encoding $false
@@ -137,7 +137,7 @@ $ClaudeSettings = "$ClaudeSettingsDir\settings.json"
 if (Test-Path $ClaudeSettings) {
     Write-Info "Removing hook configuration..."
     try {
-        $Config = Get-Content $ClaudeSettings | ConvertFrom-Json
+        $Config = Get-Content $ClaudeSettings -Raw | ConvertFrom-Json
         if ($Config.hooks -and $Config.hooks.UserPromptSubmit) {
             $Config.hooks.PSObject.Properties.Remove('UserPromptSubmit')
             $Utf8NoBom = New-Object System.Text.UTF8Encoding $false

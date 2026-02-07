@@ -8,7 +8,7 @@ $LogFile = "$LogDir\server.log"
 # Verify Bun is available
 if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
     Write-Error "Bun is not installed or not in PATH"
-    Write-Error "Please install Bun: irm bun.sh/install.ps1 | iex"
+    Write-Error "Please install Bun: irm https://bun.sh/install.ps1 | iex"
     exit 1
 }
 
@@ -37,7 +37,7 @@ $RestartTimes = @()
 
 while ($true) {
     # Check for rapid restart loop (crash loop detection)
-    $Now = [int][double]::Parse((Get-Date -UFormat %s))
+    $Now = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     $RestartTimes += $Now
 
     # Keep only restarts within the window

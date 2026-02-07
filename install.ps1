@@ -110,8 +110,14 @@ if (-not (Test-Path $ClaudeSettingsDir)) {
 }
 
 # Check disk space
-$Drive = (Get-Item $env:USERPROFILE).PSDrive.Name
-$FreeSpace = (Get-PSDrive $Drive).Free
+try {
+    $Drive = (Get-Item $env:USERPROFILE).PSDrive.Name
+    $FreeSpace = (Get-PSDrive $Drive).Free
+} catch {
+    # Fallback for UNC paths / network drives
+    $FreeSpace = (Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue).FreeSpace
+    if (-not $FreeSpace) { $FreeSpace = $MIN_DISK_SPACE } # Skip check if we can't determine
+}
 if ($FreeSpace -lt $MIN_DISK_SPACE) {
     $FreeGB = [math]::Round($FreeSpace / 1GB, 1)
     Write-Fail "Insufficient disk space" "Lucid Memory requires at least 5GB of free space.`nAvailable: ${FreeGB}GB"
@@ -122,7 +128,7 @@ $FreeGB = [math]::Round($FreeSpace / 1GB, 1)
 $McpConfig = "$env:USERPROFILE\.claude.json"
 if (Test-Path $McpConfig) {
     try {
-        $null = Get-Content $McpConfig | ConvertFrom-Json
+        $null = Get-Content $McpConfig -Raw | ConvertFrom-Json
     } catch {
         Write-Fail "Existing MCP config is malformed" "The file $McpConfig contains invalid JSON.`nPlease fix or remove it, then run this installer again."
     }
@@ -234,21 +240,22 @@ Write-Success "Bun $BunVersion"
 if ($NeedFfmpeg) {
     Write-Host "Installing ffmpeg..."
     $FfmpegInstalled = $false
-    try {
-        $result = winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements 2>&1
-        # Refresh PATH
-        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
-        if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
-            $FfmpegInstalled = $true
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        try {
+            $result = winget install --id Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements 2>&1
+            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+            if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+                $FfmpegInstalled = $true
+            }
+        } catch {
+            # winget might throw but still install
         }
-    } catch {
-        # winget might throw but still install
     }
 
     if ($FfmpegInstalled -or (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
         Write-Success "ffmpeg installed"
     } else {
-        Write-Fail "Could not install ffmpeg" "Please install manually:`n  winget install Gyan.FFmpeg`n  Or download from: https://ffmpeg.org/download.html"
+        Write-Fail "Could not install ffmpeg" "Please install manually: https://ffmpeg.org/download.html`n  Or if you have winget: winget install Gyan.FFmpeg"
     }
 } else {
     Write-Success "ffmpeg already installed"
@@ -524,7 +531,7 @@ if ($PerceptionReady) {
 
 # Update package.json to point to local packages
 $PkgPath = "$LucidDir\server\package.json"
-$Pkg = Get-Content $PkgPath | ConvertFrom-Json
+$Pkg = Get-Content $PkgPath -Raw | ConvertFrom-Json
 
 # Handle native package
 if (Test-Path "$LucidDir\native") {
@@ -564,16 +571,11 @@ try {
 }
 
 # Create CLI wrapper (batch file for Windows)
-@"
-@echo off
-bun run "%USERPROFILE%\.lucid\server\src\cli.ts" %*
-"@ | Out-File -FilePath "$LucidBin\lucid.cmd" -Encoding ASCII
+# Use %USERPROFILE% (resolved at runtime) so non-ASCII usernames work
+Write-Utf8 "$LucidBin\lucid.cmd" "@echo off`r`nbun run `"%USERPROFILE%\.lucid\server\src\cli.ts`" %*`r`n"
 
 # Create server launcher with auto-restart wrapper
-@"
-@echo off
-powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.lucid\server\bin\lucid-server-wrapper.ps1" %*
-"@ | Out-File -FilePath "$LucidBin\lucid-server.cmd" -Encoding ASCII
+Write-Utf8 "$LucidBin\lucid-server.cmd" "@echo off`r`npowershell -ExecutionPolicy Bypass -File `"%USERPROFILE%\.lucid\server\bin\lucid-server-wrapper.ps1`" %*`r`n"
 
 # Create logs directory
 New-Item -ItemType Directory -Force -Path "$LucidDir\logs" | Out-Null
@@ -612,6 +614,7 @@ switch ($EmbedChoice) {
                 # Download and run Ollama installer
                 $OllamaInstaller = "$env:TEMP\OllamaSetup.exe"
                 Invoke-WebRequest -UseBasicParsing -Uri "https://ollama.com/download/OllamaSetup.exe" -OutFile $OllamaInstaller
+                Write-Host "  The Ollama installer will open — please complete the setup wizard."
                 Start-Process -FilePath $OllamaInstaller -Wait
                 Remove-Item $OllamaInstaller -Force
 
@@ -738,7 +741,7 @@ if (Test-Path $McpConfig) {
     Write-Success "Backed up existing config"
 
     # Add our server to existing config
-    $Config = Get-Content $McpConfig | ConvertFrom-Json
+    $Config = Get-Content $McpConfig -Raw | ConvertFrom-Json
     if (-not $Config.mcpServers) {
         $Config | Add-Member -NotePropertyName "mcpServers" -NotePropertyValue @{}
     }
@@ -789,7 +792,7 @@ $HookCommand = "$LucidHooksDir\user-prompt-submit.ps1"
 
 try {
     if (Test-Path $ClaudeSettings) {
-        $Config = Get-Content $ClaudeSettings | ConvertFrom-Json
+        $Config = Get-Content $ClaudeSettings -Raw | ConvertFrom-Json
     } else {
         $Config = @{}
     }
