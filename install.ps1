@@ -708,37 +708,40 @@ switch ($EmbedChoice) {
         }
         Write-Success "Ollama installed"
 
-        # Ensure Ollama is running
+        # Ensure Ollama API is responding
+        # Use 127.0.0.1 instead of localhost — Windows can resolve localhost to
+        # ::1 (IPv6) but Ollama only listens on 127.0.0.1 (IPv4)
         Write-Host "Starting Ollama service..."
-        # Check for both CLI ("ollama") and desktop app ("ollama app") processes
-        $OllamaProcess = Get-Process | Where-Object { $_.ProcessName -like "*ollama*" } | Select-Object -First 1
-        if (-not $OllamaProcess) {
-            # Try CLI serve first
-            Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 5
-        }
-
-        # Verify it's running (more retries for fresh installs)
-        $Retries = 15
         $OllamaRunning = $false
-        $TriedDesktopApp = $false
-        while ($Retries -gt 0 -and -not $OllamaRunning) {
-            try {
-                $null = Invoke-RestMethod -Uri "http://localhost:11434/api/tags" -TimeoutSec 2
-                $OllamaRunning = $true
-            } catch {
+        try {
+            $null = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 3
+            $OllamaRunning = $true
+        } catch {}
+
+        if (-not $OllamaRunning) {
+            # API not responding — start ollama serve regardless of desktop app state
+            Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden -ErrorAction SilentlyContinue
+            Write-Host "  Waiting for Ollama to start..." -ForegroundColor DarkGray
+
+            $Retries = 15
+            $TriedDesktopApp = $false
+            while ($Retries -gt 0 -and -not $OllamaRunning) {
                 Start-Sleep -Seconds 2
-                $Retries--
-                # After several retries, check if ollama serve died and try desktop app
-                if ($Retries -eq 10 -and -not $TriedDesktopApp) {
-                    $TriedDesktopApp = $true
-                    $CliAlive = Get-Process -Name "ollama" -ErrorAction SilentlyContinue
-                    if (-not $CliAlive) {
-                        # CLI serve died — try desktop app as fallback (don't launch both
-                        # simultaneously or they'll fight for port 11434)
-                        $OllamaAppPath = "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"
-                        if (Test-Path $OllamaAppPath) {
-                            Start-Process -FilePath $OllamaAppPath -WindowStyle Minimized -ErrorAction SilentlyContinue
+                try {
+                    $null = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 2
+                    $OllamaRunning = $true
+                } catch {
+                    $Retries--
+                    # After several retries, try desktop app if CLI serve died
+                    if ($Retries -eq 10 -and -not $TriedDesktopApp) {
+                        $TriedDesktopApp = $true
+                        $CliAlive = Get-Process -Name "ollama" -ErrorAction SilentlyContinue
+                        if (-not $CliAlive) {
+                            $OllamaAppPath = "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"
+                            if (Test-Path $OllamaAppPath) {
+                                Write-Host "  Trying Ollama desktop app..." -ForegroundColor DarkGray
+                                Start-Process -FilePath $OllamaAppPath -WindowStyle Minimized -ErrorAction SilentlyContinue
+                            }
                         }
                     }
                 }

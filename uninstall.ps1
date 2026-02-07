@@ -190,7 +190,7 @@ if ($RemoveModel -match "^[Yy]$") {
         # ollama rm requires the service to be running
         $OllamaUp = $false
         try {
-            $null = Invoke-RestMethod -Uri "http://localhost:11434/api/tags" -TimeoutSec 2
+            $null = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 2
             $OllamaUp = $true
         } catch {}
 
