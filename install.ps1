@@ -15,6 +15,15 @@
 
 $ErrorActionPreference = "Stop"
 
+# Catch unhandled errors so the window doesn't close before users can read them
+trap {
+    Write-Host ""
+    Write-Host "Error: $_" -ForegroundColor Red
+    Write-Host ""
+    Read-Host "Press Enter to close"
+    break
+}
+
 # Enable ANSI colors in Windows Terminal (PS 7+ only)
 if ($PSVersionTable.PSVersion.Major -ge 7) { $PSStyle.OutputRendering = 'Ansi' }
 
@@ -30,8 +39,11 @@ function Write-Success { param($Message) Write-Host "✓ $Message" -ForegroundCo
 function Write-Warn { param($Message) Write-Host "⚠️  $Message" -ForegroundColor Yellow }
 function Write-Fail {
     param($Message, $Help)
-    Write-Host "❌ Error: $Message" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Error: $Message" -ForegroundColor Red
     if ($Help) { Write-Host $Help -ForegroundColor Yellow }
+    Write-Host ""
+    Read-Host "Press Enter to close"
     exit 1
 }
 
@@ -172,7 +184,7 @@ if (-not $Confirm) { $Confirm = "Y" }
 if ($Confirm -notmatch "^[Yy]") {
     Write-Host ""
     Write-Host "Installation cancelled."
-    exit 0
+    return
 }
 
 Write-Host ""

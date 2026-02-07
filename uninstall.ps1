@@ -12,7 +12,15 @@
 
 $ErrorActionPreference = "Stop"
 
-# Enable ANSI colors
+# Catch unhandled errors so the window doesn't close before users can read them
+trap {
+    Write-Host ""
+    Write-Host "Error: $_" -ForegroundColor Red
+    Write-Host ""
+    Read-Host "Press Enter to close"
+    break
+}
+
 # Enable ANSI colors in Windows Terminal (PS 7+ only)
 if ($PSVersionTable.PSVersion.Major -ge 7) { $PSStyle.OutputRendering = 'Ansi' }
 
@@ -59,7 +67,7 @@ $McpConfig = "$env:USERPROFILE\.claude.json"
 if (-not (Test-Path $LucidDir)) {
     Write-Host "  ${YELLOW}Lucid Memory is not installed.${NC}"
     Write-Host ""
-    exit 0
+    return
 }
 
 # === Show removal summary ===
@@ -101,7 +109,7 @@ if ($Confirm -notmatch "^[Yy]$") {
     Write-Host ""
     Write-Host "  ${DIM}Uninstall cancelled.${NC}"
     Write-Host ""
-    exit 0
+    return
 }
 Write-Host ""
 
