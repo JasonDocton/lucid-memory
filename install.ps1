@@ -15,8 +15,8 @@
 
 $ErrorActionPreference = "Stop"
 
-# Enable ANSI colors in Windows Terminal
-$PSStyle.OutputRendering = 'Ansi' 2>$null
+# Enable ANSI colors in Windows Terminal (PS 7+ only)
+if ($PSVersionTable.PSVersion.Major -ge 7) { $PSStyle.OutputRendering = 'Ansi' }
 
 # Minimum disk space required (in bytes) - 5GB
 $MIN_DISK_SPACE = 5GB

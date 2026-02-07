@@ -13,7 +13,8 @@
 $ErrorActionPreference = "Stop"
 
 # Enable ANSI colors
-$PSStyle.OutputRendering = 'Ansi' 2>$null
+# Enable ANSI colors in Windows Terminal (PS 7+ only)
+if ($PSVersionTable.PSVersion.Major -ge 7) { $PSStyle.OutputRendering = 'Ansi' }
 
 # Colors
 $e = [char]27
