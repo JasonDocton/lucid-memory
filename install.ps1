@@ -373,13 +373,39 @@ Write-Host "Downloading Lucid Memory..."
 $TempDir = New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item -ItemType Directory -Path $_ }
 Push-Location $TempDir
 
+$DownloadOk = $false
+
+# Method 1: git clone
 try {
-    # Prevent git from prompting for credentials if repo not found
     $env:GIT_TERMINAL_PROMPT = "0"
-    git clone --depth 1 https://github.com/JasonDocton/lucid-memory.git 2>$null
-    if (-not $?) { throw "Clone failed" }
-} catch {
-    Write-Fail "Could not download Lucid Memory" "Please check your internet connection and try again.`n`nIf the problem persists, the repository may not be available yet.`nVisit: https://github.com/JasonDocton/lucid-memory"
+    $gitOutput = git clone --depth 1 https://github.com/JasonDocton/lucid-memory.git 2>&1
+    if ($? -and (Test-Path "lucid-memory")) {
+        $DownloadOk = $true
+    }
+} catch {}
+
+# Method 2: Download zip archive (fallback if git clone fails)
+if (-not $DownloadOk) {
+    Write-Warn "Git clone failed, trying zip download..."
+    try {
+        $ZipUrl = "https://github.com/JasonDocton/lucid-memory/archive/refs/heads/main.zip"
+        $ZipPath = Join-Path $TempDir "lucid-memory.zip"
+        Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipPath -UseBasicParsing -ErrorAction Stop
+        Expand-Archive -Path $ZipPath -DestinationPath $TempDir -Force
+        # GitHub zips extract to lucid-memory-main/
+        if (Test-Path "lucid-memory-main") {
+            Rename-Item "lucid-memory-main" "lucid-memory"
+        }
+        if (Test-Path "lucid-memory") {
+            $DownloadOk = $true
+        }
+    } catch {
+        Write-Host "  Zip download also failed: $_" -ForegroundColor DarkGray
+    }
+}
+
+if (-not $DownloadOk) {
+    Write-Fail "Could not download Lucid Memory" "Please check your internet connection and try again.`n`nIf the problem persists, try downloading manually:`n  https://github.com/JasonDocton/lucid-memory"
 }
 
 # Copy the server

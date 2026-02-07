@@ -96,7 +96,9 @@ fi
 # Check for PATH entry
 if grep -q "/.lucid/bin" "$HOME/.zshrc" 2>/dev/null || \
    grep -q "/.lucid/bin" "$HOME/.bashrc" 2>/dev/null || \
-   grep -q "/.lucid/bin" "$HOME/.bash_profile" 2>/dev/null; then
+   grep -q "/.lucid/bin" "$HOME/.bash_profile" 2>/dev/null || \
+   grep -q "/.lucid/bin" "$HOME/.profile" 2>/dev/null || \
+   grep -q "/.lucid/bin" "$HOME/.config/fish/config.fish" 2>/dev/null; then
     REMOVE_LIST="${REMOVE_LIST}\n  ${C4}•${NC} PATH entry from shell config"
 fi
 
@@ -250,6 +252,8 @@ remove_path_entry() {
 remove_path_entry "$HOME/.zshrc"
 remove_path_entry "$HOME/.bashrc"
 remove_path_entry "$HOME/.bash_profile"
+remove_path_entry "$HOME/.profile"
+remove_path_entry "$HOME/.config/fish/config.fish"
 
 success "PATH entry removed"
 

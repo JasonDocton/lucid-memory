@@ -140,11 +140,8 @@ check_windows() {
 
 # Get available disk space in KB
 get_available_space() {
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        df -k "$HOME" | awk 'NR==2 {print $4}'
-    else
-        df -k "$HOME" | awk 'NR==2 {print $4}'
-    fi
+    # Use -P (POSIX) to prevent line-wrapping on long device names
+    df -Pk "$HOME" 2>/dev/null | awk 'NR==2 {print $4}'
 }
 
 # Check if JSON is valid
@@ -272,11 +269,11 @@ EOF
         # Linux - use systemd if available
         if command -v systemctl &> /dev/null; then
             if ! systemctl is-active --quiet ollama 2>/dev/null; then
-                sudo systemctl start ollama 2>/dev/null || ollama serve &>/dev/null &
+                sudo -n systemctl start ollama 2>/dev/null || ollama serve &>/dev/null &
                 sleep 2
             fi
             # Enable on boot
-            sudo systemctl enable ollama 2>/dev/null || true
+            sudo -n systemctl enable ollama 2>/dev/null || true
         else
             # Fallback: just start it
             if ! pgrep -x "ollama" > /dev/null; then
@@ -355,7 +352,7 @@ fi
 
 # Check disk space
 AVAILABLE_SPACE=$(get_available_space)
-if [ "$AVAILABLE_SPACE" -lt "$MIN_DISK_SPACE" ]; then
+if [ -n "$AVAILABLE_SPACE" ] && [ "$AVAILABLE_SPACE" -lt "$MIN_DISK_SPACE" ] 2>/dev/null; then
     AVAILABLE_GB=$((AVAILABLE_SPACE / 1048576))
     fail "Insufficient disk space" \
         "Lucid Memory requires at least 5GB of free space for the embedding model.\nAvailable: ${AVAILABLE_GB}GB"
@@ -511,16 +508,26 @@ if [ "$NEED_FFMPEG" = true ]; then
         fi
     else
         # Linux - try common package managers
+        # Use sudo -n (non-interactive) when stdin isn't a terminal to avoid hanging
+        SUDO_CMD="sudo"
+        if [ "$INTERACTIVE" = false ]; then
+            SUDO_CMD="sudo -n"
+        fi
+
         if command -v apt-get &> /dev/null; then
-            if sudo apt-get update && sudo apt-get install -y ffmpeg; then
+            if $SUDO_CMD apt-get update -y && $SUDO_CMD apt-get install -y ffmpeg; then
                 FFMPEG_INSTALLED=true
             fi
         elif command -v dnf &> /dev/null; then
-            if sudo dnf install -y ffmpeg; then
+            if $SUDO_CMD dnf install -y ffmpeg; then
                 FFMPEG_INSTALLED=true
             fi
         elif command -v pacman &> /dev/null; then
-            if sudo pacman -S --noconfirm ffmpeg; then
+            if $SUDO_CMD pacman -S --noconfirm ffmpeg; then
+                FFMPEG_INSTALLED=true
+            fi
+        elif command -v apk &> /dev/null; then
+            if $SUDO_CMD apk add ffmpeg; then
                 FFMPEG_INSTALLED=true
             fi
         fi
@@ -529,8 +536,8 @@ if [ "$NEED_FFMPEG" = true ]; then
     if [ "$FFMPEG_INSTALLED" = true ] && command -v ffmpeg &> /dev/null; then
         success "ffmpeg installed"
     else
-        fail "Could not install ffmpeg" \
-            "Please install ffmpeg manually and run this installer again.\n  macOS: brew install ffmpeg\n  Ubuntu/Debian: sudo apt install ffmpeg\n  Fedora: sudo dnf install ffmpeg"
+        warn "Could not install ffmpeg (needed for video processing)"
+        echo "  Install manually: sudo apt install ffmpeg (or equivalent for your distro)"
     fi
 else
     success "ffmpeg already installed"
@@ -546,6 +553,12 @@ if [ "$NEED_YTDLP" = true ]; then
         fi
     else
         # Linux - try pip first, then package managers
+        # Use sudo -n (non-interactive) when stdin isn't a terminal to avoid hanging
+        SUDO_CMD="sudo"
+        if [ "$INTERACTIVE" = false ]; then
+            SUDO_CMD="sudo -n"
+        fi
+
         if command -v pip3 &> /dev/null; then
             if pip3 install --user yt-dlp; then
                 YTDLP_INSTALLED=true
@@ -558,11 +571,15 @@ if [ "$NEED_YTDLP" = true ]; then
                 export PATH="$HOME/.local/bin:$PATH"
             fi
         elif command -v apt-get &> /dev/null; then
-            if sudo apt-get update && sudo apt-get install -y yt-dlp; then
+            if $SUDO_CMD apt-get update -y && $SUDO_CMD apt-get install -y yt-dlp; then
                 YTDLP_INSTALLED=true
             fi
         elif command -v dnf &> /dev/null; then
-            if sudo dnf install -y yt-dlp; then
+            if $SUDO_CMD dnf install -y yt-dlp; then
+                YTDLP_INSTALLED=true
+            fi
+        elif command -v apk &> /dev/null; then
+            if $SUDO_CMD apk add yt-dlp; then
                 YTDLP_INSTALLED=true
             fi
         fi
@@ -585,8 +602,8 @@ if [ "$NEED_YTDLP" = true ]; then
     if [ "$YTDLP_INSTALLED" = true ] && command -v yt-dlp &> /dev/null; then
         success "yt-dlp installed"
     else
-        fail "Could not install yt-dlp" \
-            "Please install yt-dlp manually and run this installer again.\n  pip install --user yt-dlp\n  Or: sudo apt install yt-dlp"
+        warn "Could not install yt-dlp (needed for video downloads)"
+        echo "  Install manually: pip install --user yt-dlp"
     fi
 else
     success "yt-dlp already installed"
@@ -658,9 +675,27 @@ cd "$TEMP_DIR"
 
 # Clone the repository (shallow clone for speed)
 # GIT_TERMINAL_PROMPT=0 prevents git from asking for credentials if repo not found
-if ! GIT_TERMINAL_PROMPT=0 git clone --depth 1 https://github.com/JasonDocton/lucid-memory.git 2>/dev/null; then
+DOWNLOAD_OK=false
+if GIT_TERMINAL_PROMPT=0 git clone --depth 1 https://github.com/JasonDocton/lucid-memory.git 2>/dev/null; then
+    DOWNLOAD_OK=true
+fi
+
+# Fallback: download zip archive if git clone fails
+if [ "$DOWNLOAD_OK" = false ]; then
+    warn "Git clone failed, trying zip download..."
+    if curl -fsSL "https://github.com/JasonDocton/lucid-memory/archive/refs/heads/main.zip" -o "lucid-memory.zip" 2>/dev/null; then
+        if command -v unzip &> /dev/null; then
+            unzip -q "lucid-memory.zip" && mv "lucid-memory-main" "lucid-memory" && DOWNLOAD_OK=true
+        elif command -v python3 &> /dev/null; then
+            python3 -c "import zipfile; zipfile.ZipFile('lucid-memory.zip').extractall()" && mv "lucid-memory-main" "lucid-memory" && DOWNLOAD_OK=true
+        fi
+        rm -f "lucid-memory.zip"
+    fi
+fi
+
+if [ "$DOWNLOAD_OK" = false ]; then
     fail "Could not download Lucid Memory" \
-        "Please check your internet connection and try again.\n\nIf the problem persists, the repository may not be available yet.\nVisit: https://github.com/JasonDocton/lucid-memory"
+        "Please check your internet connection and try again.\n\nIf the problem persists, try downloading manually:\n  https://github.com/JasonDocton/lucid-memory"
 fi
 
 # Copy the server
@@ -691,10 +726,29 @@ if [ -d "lucid-memory/packages/lucid-perception" ]; then
     cp -r "lucid-memory/packages/lucid-perception" "$LUCID_DIR/perception"
 fi
 
+# Detect if the system uses musl libc (Alpine, Void, etc.)
+is_musl() {
+    # Check for musl dynamic linker
+    if [ -f /lib/ld-musl-x86_64.so.1 ] || [ -f /lib/ld-musl-aarch64.so.1 ]; then
+        return 0
+    fi
+    # Check ldd version string
+    if command -v ldd &> /dev/null; then
+        if ldd --version 2>&1 | grep -qi musl; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 # Detect platform for pre-built binaries
 detect_native_binary() {
     local arch=$(uname -m)
     local os=$(uname -s)
+    local libc="gnu"
+    if [ "$os" = "Linux" ] && is_musl; then
+        libc="musl"
+    fi
 
     case "$os" in
         Darwin)
@@ -706,9 +760,9 @@ detect_native_binary() {
             ;;
         Linux)
             if [ "$arch" = "aarch64" ]; then
-                echo "lucid-native.linux-arm64-gnu.node"
+                echo "lucid-native.linux-arm64-${libc}.node"
             else
-                echo "lucid-native.linux-x64-gnu.node"
+                echo "lucid-native.linux-x64-${libc}.node"
             fi
             ;;
         *)
@@ -731,10 +785,17 @@ if [ "$NATIVE_READY" = false ] && [ -n "$NATIVE_BINARY" ]; then
     echo "Downloading pre-built native binary..."
     RELEASE_URL="https://github.com/JasonDocton/lucid-memory/releases/latest/download/$NATIVE_BINARY"
     if curl -fsSL "$RELEASE_URL" -o "$LUCID_DIR/native/$NATIVE_BINARY" 2>/dev/null; then
-        chmod +x "$LUCID_DIR/native/$NATIVE_BINARY"
-        success "Downloaded native binary"
-        NATIVE_READY=true
+        # Validate the downloaded file is non-empty
+        if [ -s "$LUCID_DIR/native/$NATIVE_BINARY" ]; then
+            chmod +x "$LUCID_DIR/native/$NATIVE_BINARY"
+            success "Downloaded native binary"
+            NATIVE_READY=true
+        else
+            rm -f "$LUCID_DIR/native/$NATIVE_BINARY"
+            echo "  Downloaded binary was empty, skipping"
+        fi
     else
+        rm -f "$LUCID_DIR/native/$NATIVE_BINARY" 2>/dev/null
         echo "  No pre-built binary available for download"
     fi
 fi
@@ -793,6 +854,10 @@ fi
 detect_perception_binary() {
     local arch=$(uname -m)
     local os=$(uname -s)
+    local libc="gnu"
+    if [ "$os" = "Linux" ] && is_musl; then
+        libc="musl"
+    fi
 
     case "$os" in
         Darwin)
@@ -804,9 +869,9 @@ detect_perception_binary() {
             ;;
         Linux)
             if [ "$arch" = "aarch64" ]; then
-                echo "lucid-perception.linux-arm64-gnu.node"
+                echo "lucid-perception.linux-arm64-${libc}.node"
             else
-                echo "lucid-perception.linux-x64-gnu.node"
+                echo "lucid-perception.linux-x64-${libc}.node"
             fi
             ;;
         *)
@@ -829,10 +894,17 @@ if [ "$PERCEPTION_READY" = false ] && [ -n "$PERCEPTION_BINARY" ] && [ -d "$LUCI
     echo "Downloading pre-built perception binary..."
     PERCEPTION_RELEASE_URL="https://github.com/JasonDocton/lucid-memory/releases/latest/download/$PERCEPTION_BINARY"
     if curl -fsSL "$PERCEPTION_RELEASE_URL" -o "$LUCID_DIR/perception/$PERCEPTION_BINARY" 2>/dev/null; then
-        chmod +x "$LUCID_DIR/perception/$PERCEPTION_BINARY"
-        success "Downloaded perception binary"
-        PERCEPTION_READY=true
+        # Validate the downloaded file is non-empty
+        if [ -s "$LUCID_DIR/perception/$PERCEPTION_BINARY" ]; then
+            chmod +x "$LUCID_DIR/perception/$PERCEPTION_BINARY"
+            success "Downloaded perception binary"
+            PERCEPTION_READY=true
+        else
+            rm -f "$LUCID_DIR/perception/$PERCEPTION_BINARY"
+            echo "  Downloaded perception binary was empty, skipping"
+        fi
     else
+        rm -f "$LUCID_DIR/perception/$PERCEPTION_BINARY" 2>/dev/null
         echo "  No pre-built perception binary available for download"
     fi
 fi
@@ -1016,11 +1088,22 @@ case $EMBED_CHOICE in
             if [[ "$OSTYPE" == "darwin"* ]]; then
                 brew install ollama
             else
-                # Linux
-                curl -fsSL https://ollama.com/install.sh | sh
+                # Linux — Ollama's installer uses sudo internally
+                if [ "$INTERACTIVE" = true ]; then
+                    curl -fsSL https://ollama.com/install.sh | sh
+                else
+                    # In non-interactive mode, sudo may not work without a password
+                    curl -fsSL https://ollama.com/install.sh | SUDO_ASKPASS=/bin/false sh 2>/dev/null || true
+                fi
             fi
         fi
-        success "Ollama installed"
+
+        if command -v ollama &> /dev/null; then
+            success "Ollama installed"
+        else
+            fail "Could not install Ollama" \
+                "Please install Ollama manually: https://ollama.com/download\nThen run this installer again."
+        fi
 
         # Ensure Ollama is running
         echo "Starting Ollama service..."
@@ -1423,6 +1506,8 @@ elif [ -f "$HOME/.bashrc" ]; then
     SHELL_CONFIG="$HOME/.bashrc"
 elif [ -f "$HOME/.bash_profile" ]; then
     SHELL_CONFIG="$HOME/.bash_profile"
+elif [ -f "$HOME/.profile" ]; then
+    SHELL_CONFIG="$HOME/.profile"
 fi
 
 if [ -n "$SHELL_CONFIG" ]; then
@@ -1430,7 +1515,19 @@ if [ -n "$SHELL_CONFIG" ]; then
         echo '' >> "$SHELL_CONFIG"
         echo '# Lucid Memory' >> "$SHELL_CONFIG"
         echo 'export PATH="$HOME/.lucid/bin:$PATH"' >> "$SHELL_CONFIG"
-        success "Added to PATH"
+        success "Added to PATH ($SHELL_CONFIG)"
+    fi
+fi
+
+# Also add to Fish shell config if Fish is installed
+FISH_CONFIG="$HOME/.config/fish/config.fish"
+if [ -d "$HOME/.config/fish" ] || command -v fish &> /dev/null; then
+    mkdir -p "$HOME/.config/fish"
+    if ! grep -q "/.lucid/bin" "$FISH_CONFIG" 2>/dev/null; then
+        echo '' >> "$FISH_CONFIG"
+        echo '# Lucid Memory' >> "$FISH_CONFIG"
+        echo 'set -gx PATH $HOME/.lucid/bin $PATH' >> "$FISH_CONFIG"
+        success "Added to Fish PATH"
     fi
 fi
 show_progress  # Step 7: Install hooks & PATH
