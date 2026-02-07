@@ -224,10 +224,29 @@ if ($ExistingTask) {
     }
 }
 
+# === Stop Running Server Processes ===
+
+# Kill any Bun processes running Lucid Memory server/CLI files — these lock
+# the ~/.lucid directory and prevent deletion.
+# Use WMI for command line access (Get-Process lacks it in PS 5.1)
+Get-CimInstance Win32_Process -Filter "Name = 'bun.exe'" -ErrorAction SilentlyContinue | Where-Object {
+    $_.CommandLine -like "*\.lucid*"
+} | ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+}
+Start-Sleep -Seconds 1
+
 # === Remove Lucid Directory ===
 
 Write-Info "Removing ~/.lucid directory..."
-Remove-Item -Recurse -Force $LucidDir
+try {
+    Remove-Item -Recurse -Force $LucidDir
+} catch {
+    # File may still be briefly locked — retry once
+    Write-Host "  Waiting for file locks to release..." -ForegroundColor DarkGray
+    Start-Sleep -Seconds 3
+    Remove-Item -Recurse -Force $LucidDir
+}
 Write-Success "Lucid directory removed"
 
 # === Done ===
