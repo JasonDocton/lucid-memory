@@ -10,7 +10,7 @@
 #   2. Installs Bun if needed
 #   3. Creates ~/.lucid directory
 #   4. Downloads and installs lucid-server
-#   5. Sets up Ollama for local embeddings (or OpenAI)
+#   5. Downloads BGE embedding model (or configures OpenAI)
 #   6. Configures Claude Code MCP settings
 #   7. Installs hooks for automatic memory capture
 #   8. Restarts Claude Code to activate
@@ -226,89 +226,6 @@ EOF
     fi
 }
 
-# Start Ollama service and ensure it persists
-ensure_ollama_running() {
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS - check if Ollama is running
-        if ! pgrep -x "ollama" > /dev/null && ! pgrep -f "Ollama" > /dev/null; then
-            echo "Starting Ollama..."
-            # Try to start Ollama app if installed via DMG
-            if [ -d "/Applications/Ollama.app" ]; then
-                open -a Ollama
-                sleep 3
-            else
-                # Start ollama serve in background
-                ollama serve &>/dev/null &
-                sleep 2
-            fi
-        fi
-
-        # Create launchd plist for auto-start
-        local plist_dir="$HOME/Library/LaunchAgents"
-        local plist_file="$plist_dir/com.lucid.ollama.plist"
-
-        mkdir -p "$plist_dir"
-
-        # Only create if Ollama was installed via CLI (not app)
-        if [ ! -d "/Applications/Ollama.app" ] && command -v ollama &> /dev/null; then
-            cat > "$plist_file" << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.lucid.ollama</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>$(command -v ollama)</string>
-        <string>serve</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/tmp/ollama.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/ollama.error.log</string>
-</dict>
-</plist>
-EOF
-            # bootstrap is the modern API (macOS 10.10+), load is deprecated
-            launchctl bootstrap "gui/$(id -u)" "$plist_file" 2>/dev/null || \
-                launchctl load "$plist_file" 2>/dev/null || true
-        fi
-    else
-        # Linux - use systemd if available
-        if command -v systemctl &> /dev/null; then
-            if ! systemctl is-active --quiet ollama 2>/dev/null; then
-                sudo -n systemctl start ollama 2>/dev/null || ollama serve &>/dev/null &
-                sleep 2
-            fi
-            # Enable on boot
-            sudo -n systemctl enable ollama 2>/dev/null || true
-        else
-            # Fallback: just start it
-            if ! pgrep -x "ollama" > /dev/null; then
-                ollama serve &>/dev/null &
-                sleep 2
-            fi
-        fi
-    fi
-
-    # Verify it's running
-    local retries=5
-    while [ $retries -gt 0 ]; do
-        if curl -s http://localhost:11434/api/tags &>/dev/null; then
-            return 0
-        fi
-        sleep 1
-        retries=$((retries - 1))
-    done
-
-    return 1
-}
-
 # Restart Claude Code
 restart_claude_code() {
     echo ""
@@ -368,7 +285,7 @@ AVAILABLE_SPACE=$(get_available_space)
 if [ -n "$AVAILABLE_SPACE" ] && [ "$AVAILABLE_SPACE" -lt "$MIN_DISK_SPACE" ] 2>/dev/null; then
     AVAILABLE_GB=$((AVAILABLE_SPACE / 1048576))
     fail "Insufficient disk space" \
-        "Lucid Memory requires at least 5GB of free space for the embedding model.\nAvailable: ${AVAILABLE_GB}GB"
+        "Lucid Memory requires at least 5GB of free space.\nAvailable: ${AVAILABLE_GB}GB"
 fi
 
 # Check existing MCP config
@@ -388,7 +305,6 @@ NEED_BUN=false
 NEED_FFMPEG=false
 NEED_YTDLP=false
 NEED_WHISPER=false
-NEED_OLLAMA=false
 NEED_PIP=false
 
 # Add Python user bin to PATH for detection (pip installs go here)
@@ -440,14 +356,9 @@ if ! command -v whisper &> /dev/null; then
     INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} OpenAI Whisper (audio transcription)"
 fi
 
-# Check for Ollama
-if ! command -v ollama &> /dev/null; then
-    NEED_OLLAMA=true
-    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Ollama + nomic-embed-text (local embeddings)"
-fi
-
 # Always installing these
 INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Lucid Memory server"
+INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} BGE embedding model (~220MB)"
 INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Whisper model (74MB)"
 INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Claude Code hooks"
 
@@ -1084,79 +995,25 @@ show_progress  # Step 4: Install server
 
 # === Embedding Provider ===
 
+# Built-in BGE-base-en-v1.5 model runs in-process (no external services needed)
+# OpenAI API key is an optional override for power users
 echo ""
-echo -e "${BOLD}Embedding provider setup:${NC}"
-echo "  [1] Local (Ollama) - Free, private, runs on your machine (recommended)"
-echo "  [2] OpenAI API - Faster, requires API key (\$0.0001/query)"
+echo -e "${BOLD}Embedding provider:${NC}"
+echo "  Using built-in BGE-base-en-v1.5 model (no external services needed)"
+echo ""
+echo "  Optional: provide an OpenAI API key to use cloud embeddings instead."
 echo ""
 
+OPENAI_KEY=""
 if [ "$INTERACTIVE" = true ]; then
-    read -p "Choice [1]: " EMBED_CHOICE
-    EMBED_CHOICE=${EMBED_CHOICE:-1}
-else
-    echo "Non-interactive mode, defaulting to Ollama..."
-    EMBED_CHOICE=1
+    read -p "OpenAI API key (press Enter to skip): " OPENAI_KEY
 fi
-
-case $EMBED_CHOICE in
-    2)
-        echo ""
-        if [ "$INTERACTIVE" = true ]; then
-            read -p "Enter OpenAI API key: " OPENAI_KEY
-        fi
-        if [ -z "$OPENAI_KEY" ]; then
-            fail "OpenAI API key is required" \
-                "Please run the installer again and provide a valid API key,\nor choose option 1 for local embeddings."
-        fi
-        echo "OPENAI_API_KEY=$OPENAI_KEY" > "$LUCID_DIR/.env"
-        success "OpenAI configured"
-        ;;
-    *)
-        # Default to Ollama
-        echo ""
-        echo "Setting up Ollama..."
-
-        # Install Ollama if not present (Homebrew already installed if needed)
-        if [ "$NEED_OLLAMA" = true ]; then
-            echo "Installing Ollama..."
-
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                brew install ollama || true
-            else
-                # Linux — Ollama's installer uses sudo internally
-                if [ "$INTERACTIVE" = true ]; then
-                    curl -fsSL https://ollama.com/install.sh | sh
-                else
-                    # In non-interactive mode, sudo may not work without a password
-                    curl -fsSL https://ollama.com/install.sh | SUDO_ASKPASS=/bin/false sh 2>/dev/null || true
-                fi
-            fi
-        fi
-
-        if command -v ollama &> /dev/null; then
-            success "Ollama installed"
-        else
-            fail "Could not install Ollama" \
-                "Please install Ollama manually: https://ollama.com/download\nThen run this installer again."
-        fi
-
-        # Ensure Ollama is running
-        echo "Starting Ollama service..."
-        if ! ensure_ollama_running; then
-            fail "Could not start Ollama service" \
-                "Please start Ollama manually and run this installer again:\n  ollama serve"
-        fi
-        success "Ollama service running"
-
-        # Pull the embedding model
-        echo "Downloading embedding model (this may take a few minutes)..."
-        if ! ollama pull nomic-embed-text; then
-            fail "Failed to download embedding model" \
-                "Please try manually: ollama pull nomic-embed-text"
-        fi
-        success "Embedding model ready"
-        ;;
-esac
+if [ -n "$OPENAI_KEY" ]; then
+    echo "OPENAI_API_KEY=$OPENAI_KEY" > "$LUCID_DIR/.env"
+    success "OpenAI configured as embedding provider"
+else
+    success "Using built-in BGE embeddings (recommended)"
+fi
 show_progress  # Step 5: Embedding provider
 
 # === Client Selection ===
@@ -1222,20 +1079,64 @@ if [ "$INSTALL_CLAUDE" = true ] && [ "$INSTALL_CODEX" = true ]; then
     esac
 fi
 
-# === Download Whisper Model for Transcription ===
+# === Download Models ===
 
 LUCID_MODELS="$LUCID_DIR/models"
 mkdir -p "$LUCID_MODELS"
 
+# BGE embedding model (FP16 ONNX, ~220MB) — downloaded from HuggingFace CDN
+BGE_MODEL_URL="https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_fp16.onnx"
+BGE_TOKENIZER_URL="https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/tokenizer.json"
+
+if [ ! -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx" ]; then
+    echo ""
+    echo "Downloading BGE embedding model (~220MB)..."
+    rm -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp"
+    if curl -fL --progress-bar -o "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp" "$BGE_MODEL_URL"; then
+        # Validate file is actually a model (>100MB), not a CDN error page
+        FILE_SIZE=$(wc -c < "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp" 2>/dev/null | tr -d ' ')
+        if [ "${FILE_SIZE:-0}" -gt 100000000 ]; then
+            mv "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp" "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx"
+            success "BGE embedding model downloaded"
+        else
+            rm -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp"
+            warn "Downloaded BGE model is too small (${FILE_SIZE} bytes) - may be corrupted"
+        fi
+    else
+        rm -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp"
+        warn "Could not download BGE model - embeddings will fall back to OpenAI if available"
+    fi
+else
+    success "BGE embedding model already present"
+fi
+
+if [ ! -f "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json" ]; then
+    echo "Downloading BGE tokenizer..."
+    rm -f "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json.tmp"
+    if curl -fL --progress-bar -o "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json.tmp" "$BGE_TOKENIZER_URL" \
+      && [ -s "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json.tmp" ]; then
+        mv "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json.tmp" "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json"
+        success "BGE tokenizer downloaded"
+    else
+        rm -f "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json.tmp"
+        warn "Could not download BGE tokenizer"
+    fi
+else
+    success "BGE tokenizer already present"
+fi
+
+# Whisper model for video transcription (74MB)
 if [ ! -f "$LUCID_MODELS/ggml-base.en.bin" ]; then
     echo ""
     echo "Downloading Whisper model for video transcription (74MB)..."
-    if curl -fL -o "$LUCID_MODELS/ggml-base.en.bin" \
-      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" 2>/dev/null \
-      && [ -s "$LUCID_MODELS/ggml-base.en.bin" ]; then
+    rm -f "$LUCID_MODELS/ggml-base.en.bin.tmp"
+    if curl -fL --progress-bar -o "$LUCID_MODELS/ggml-base.en.bin.tmp" \
+      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" \
+      && [ -s "$LUCID_MODELS/ggml-base.en.bin.tmp" ]; then
+        mv "$LUCID_MODELS/ggml-base.en.bin.tmp" "$LUCID_MODELS/ggml-base.en.bin"
         success "Whisper model downloaded"
     else
-        rm -f "$LUCID_MODELS/ggml-base.en.bin"
+        rm -f "$LUCID_MODELS/ggml-base.en.bin.tmp"
         warn "Could not download Whisper model - video transcription will be unavailable"
         echo "  To download manually: curl -L -o $LUCID_MODELS/ggml-base.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
     fi

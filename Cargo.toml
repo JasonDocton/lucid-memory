@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 license = "GPL-3.0"
 repository = "https://github.com/JasonDocton/lucid-memory"
@@ -39,6 +39,12 @@ anyhow = "1"
 # Utilities
 bon = "3.6"
 derive_more = "1"
+
+# Embedding (ONNX Runtime)
+ort = { version = "2.0.0-rc.11", default-features = true }
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+ndarray = "0.17"
+dirs = "6.0"
 
 # Benchmarking
 criterion = { version = "0.5", features = ["html_reports"] }

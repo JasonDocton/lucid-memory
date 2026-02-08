@@ -112,6 +112,8 @@
 #![allow(clippy::needless_return)]
 
 pub mod activation;
+#[cfg(feature = "embedding")]
+pub mod embedding;
 pub mod location;
 pub mod retrieval;
 pub mod spreading;

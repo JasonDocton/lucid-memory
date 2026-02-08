@@ -347,6 +347,7 @@ export class LucidStorage {
 		this.db = new Database(dbPath)
 		this.db.exec("PRAGMA journal_mode = WAL")
 		this.db.exec("PRAGMA foreign_keys = ON")
+		this.db.exec("PRAGMA busy_timeout = 5000")
 
 		this.initSchema()
 	}
@@ -408,6 +409,7 @@ export class LucidStorage {
       CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
       CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_access_history_memory ON access_history(memory_id);
+      CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(model);
       CREATE INDEX IF NOT EXISTS idx_associations_source ON associations(source_id);
       CREATE INDEX IF NOT EXISTS idx_associations_target ON associations(target_id);
 
@@ -522,6 +524,7 @@ export class LucidStorage {
       CREATE INDEX IF NOT EXISTS idx_visual_memories_significance ON visual_memories(significance);
       CREATE INDEX IF NOT EXISTS idx_visual_memories_project ON visual_memories(project_id);
       CREATE INDEX IF NOT EXISTS idx_visual_access_memory ON visual_access_history(visual_memory_id);
+      CREATE INDEX IF NOT EXISTS idx_visual_embeddings_model ON visual_embeddings(model);
 
       -- Sessions for temporal context tracking (Phase 4)
       -- Sessions auto-expire after 30 minutes of inactivity
@@ -924,6 +927,48 @@ export class LucidStorage {
 			.all(limit) as MemoryRow[]
 
 		return rows.map((r) => this.rowToMemory(r))
+	}
+
+	/**
+	 * Count embeddings that don't match the given model name.
+	 */
+	countEmbeddingsNotMatching(model: string): number {
+		const row = this.db
+			.prepare(`SELECT COUNT(*) as c FROM embeddings WHERE model != ?`)
+			.get(model) as { c: number }
+		return row.c
+	}
+
+	/**
+	 * Delete embeddings that don't match the given model name.
+	 * The background processor will re-generate them with the current model.
+	 */
+	deleteEmbeddingsNotMatching(model: string): number {
+		const result = this.db
+			.prepare(`DELETE FROM embeddings WHERE model != ?`)
+			.run(model)
+		return result.changes
+	}
+
+	/**
+	 * Count visual embeddings that don't match the given model name.
+	 */
+	countVisualEmbeddingsNotMatching(model: string): number {
+		const row = this.db
+			.prepare(`SELECT COUNT(*) as c FROM visual_embeddings WHERE model != ?`)
+			.get(model) as { c: number }
+		return row.c
+	}
+
+	/**
+	 * Delete visual embeddings that don't match the given model name.
+	 * The background processor will re-generate them with the current model.
+	 */
+	deleteVisualEmbeddingsNotMatching(model: string): number {
+		const result = this.db
+			.prepare(`DELETE FROM visual_embeddings WHERE model != ?`)
+			.run(model)
+		return result.changes
 	}
 
 	// ============================================================================
@@ -2736,6 +2781,8 @@ export class LucidStorage {
 		projectCount: number
 		locationCount: number
 		visualMemoryCount: number
+		pendingEmbeddingCount: number
+		pendingVisualEmbeddingCount: number
 		dbSizeBytes: number
 	} {
 		const memoryCount = (
@@ -2768,6 +2815,20 @@ export class LucidStorage {
 				c: number
 			}
 		).c
+		const pendingEmbeddingCount = (
+			this.db
+				.prepare(
+					`SELECT COUNT(*) as c FROM memories m LEFT JOIN embeddings e ON m.id = e.memory_id WHERE e.memory_id IS NULL`
+				)
+				.get() as { c: number }
+		).c
+		const pendingVisualEmbeddingCount = (
+			this.db
+				.prepare(
+					`SELECT COUNT(*) as c FROM visual_memories vm LEFT JOIN visual_embeddings ve ON vm.id = ve.visual_memory_id WHERE ve.visual_memory_id IS NULL`
+				)
+				.get() as { c: number }
+		).c
 		const dbSizeBytes = (
 			this.db
 				.prepare(
@@ -2783,6 +2844,8 @@ export class LucidStorage {
 			projectCount,
 			locationCount,
 			visualMemoryCount,
+			pendingEmbeddingCount,
+			pendingVisualEmbeddingCount,
 			dbSizeBytes,
 		}
 	}

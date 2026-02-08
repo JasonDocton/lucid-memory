@@ -215,7 +215,7 @@ That's it. Your AI coding assistant now remembers across sessions.
 
 1. Checks prerequisites (git, disk space)
 2. Installs Bun runtime if needed
-3. Sets up Ollama for local embeddings (or OpenAI API)
+3. Downloads BGE embedding model for local semantic search (or OpenAI API)
 4. Lets you choose which clients to configure (Claude Code, Codex, or both)
 5. Optionally configures database isolation (shared, per-client, or custom profiles)
 6. Configures MCP settings for your chosen clients

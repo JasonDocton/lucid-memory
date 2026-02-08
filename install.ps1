@@ -8,7 +8,7 @@
 #   2. Installs Bun if needed
 #   3. Creates ~/.lucid directory
 #   4. Downloads and installs lucid-server
-#   5. Sets up Ollama for local embeddings (or OpenAI)
+#   5. Downloads BGE embedding model (or configures OpenAI)
 #   6. Configures Claude Code MCP settings
 #   7. Installs hooks for automatic memory capture
 #   8. Restarts Claude Code to activate
@@ -185,7 +185,6 @@ $NeedBun = -not (Get-Command bun -ErrorAction SilentlyContinue)
 $NeedFfmpeg = -not (Get-Command ffmpeg -ErrorAction SilentlyContinue)
 $NeedYtdlp = -not (Get-Command yt-dlp -ErrorAction SilentlyContinue)
 $NeedWhisper = -not (Get-Command whisper -ErrorAction SilentlyContinue)
-$NeedOllama = -not (Get-Command ollama -ErrorAction SilentlyContinue)
 $HasPip = (Get-Command pip -ErrorAction SilentlyContinue) -or (Get-Command pip3 -ErrorAction SilentlyContinue)
 if (-not $HasPip) {
     # Fallback: check if Python can run pip as a module
@@ -202,10 +201,9 @@ if ($NeedBun) { $InstallList += "  ${C4}•${NC} Bun (JavaScript runtime)" }
 if ($NeedFfmpeg) { $InstallList += "  ${C4}•${NC} ffmpeg (video processing)" }
 if ($NeedYtdlp) { $InstallList += "  ${C4}•${NC} yt-dlp (video downloads)" }
 if ($NeedWhisper) { $InstallList += "  ${C4}•${NC} OpenAI Whisper (audio transcription)" }
-if ($NeedOllama) { $InstallList += "  ${C4}•${NC} Ollama + nomic-embed-text (local embeddings)" }
-
 # Always installing these
 $InstallList += "  ${C4}•${NC} Lucid Memory server"
+$InstallList += "  ${C4}•${NC} BGE embedding model (~220MB)"
 $InstallList += "  ${C4}•${NC} Whisper model (74MB)"
 $InstallList += "  ${C4}•${NC} Claude Code hooks"
 
@@ -664,173 +662,96 @@ Show-Progress  # Step 4: Install server
 
 # === Embedding Provider ===
 
+# Built-in BGE-base-en-v1.5 model runs in-process (no external services needed)
+# OpenAI API key is an optional override for power users
 Write-Host ""
-Write-Host "Embedding provider setup:" -ForegroundColor White
-Write-Host "  [1] Local (Ollama) - Free, private, runs on your machine (recommended)"
-Write-Host "  [2] OpenAI API - Faster, requires API key (`$0.0001/query)"
+Write-Host "Embedding provider:" -ForegroundColor White
+Write-Host "  Using built-in BGE-base-en-v1.5 model (no external services needed)"
 Write-Host ""
-$EmbedChoice = Read-Host "Choice [1]"
-if (-not $EmbedChoice) { $EmbedChoice = "1" }
-
-switch ($EmbedChoice) {
-    "2" {
-        Write-Host ""
-        $OpenAIKey = Read-Host "Enter OpenAI API key"
-        if (-not $OpenAIKey) {
-            Write-Fail "OpenAI API key is required" "Please run the installer again and provide a valid API key,`nor choose option 1 for local embeddings."
-        }
-        Write-Utf8 "$LucidDir\.env" "OPENAI_API_KEY=$OpenAIKey"
-        Write-Success "OpenAI configured"
-    }
-    default {
-        Write-Host ""
-        Write-Host "Setting up Ollama..."
-
-        # Install Ollama if needed (detected earlier)
-        if ($NeedOllama) {
-            Write-Host "Downloading Ollama installer (~200MB, this may take a minute)..."
-            try {
-                $OllamaInstaller = "$env:TEMP\OllamaSetup.exe"
-                # Use BITS for background download with progress, fall back to Invoke-WebRequest
-                $DownloadOk = $false
-                try {
-                    $BitsJob = Start-BitsTransfer -Source "https://ollama.com/download/OllamaSetup.exe" -Destination $OllamaInstaller -DisplayName "Ollama" -ErrorAction Stop
-                    $DownloadOk = $true
-                } catch {
-                    # BITS unavailable or failed — fall back
-                    Write-Host "  Downloading (no progress available)..." -ForegroundColor DarkGray
-                    Invoke-WebRequest -UseBasicParsing -Uri "https://ollama.com/download/OllamaSetup.exe" -OutFile $OllamaInstaller
-                    $DownloadOk = $true
-                }
-
-                if ($DownloadOk -and (Test-Path $OllamaInstaller)) {
-                    Write-Host "Installing Ollama (silent install)..."
-                    # /VERYSILENT skips the GUI wizard, /SUPPRESSMSGBOXES suppresses dialogs,
-                    # /SP- skips "This will install..." prompt.
-                    # -Verb RunAs requests elevation — Ollama installer needs admin.
-                    try {
-                        $Proc = Start-Process -FilePath $OllamaInstaller -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /SP-" -Verb RunAs -PassThru
-                    } catch {
-                        # User declined UAC prompt
-                        throw "Ollama installer requires administrator privileges"
-                    }
-                    # The Ollama installer auto-launches the desktop app after install,
-                    # which prevents the installer process from exiting. Poll and kill
-                    # the auto-launched app so the installer can complete.
-                    $WaitSec = 0
-                    while (-not $Proc.HasExited -and $WaitSec -lt 300) {
-                        Start-Sleep -Seconds 3
-                        $WaitSec += 3
-                        Get-Process | Where-Object { $_.ProcessName -like "*ollama*" -and $_.Id -ne $Proc.Id } | Stop-Process -Force -ErrorAction SilentlyContinue
-                    }
-                    if (-not $Proc.HasExited) {
-                        Stop-Process -Id $Proc.Id -Force -ErrorAction SilentlyContinue
-                        throw "Installer timed out"
-                    }
-                    if ($Proc.ExitCode -ne 0) {
-                        throw "Installer exited with code $($Proc.ExitCode)"
-                    }
-                    Remove-Item $OllamaInstaller -Force -ErrorAction SilentlyContinue
-                }
-
-                # Refresh PATH
-                $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
-            } catch {
-                Write-Fail "Ollama installation failed" "Please install Ollama manually: https://ollama.com`nThen run this installer again."
-            }
-        }
-        Write-Success "Ollama installed"
-
-        # Ensure Ollama API is responding
-        # Use 127.0.0.1 instead of localhost — Windows can resolve localhost to
-        # ::1 (IPv6) but Ollama only listens on 127.0.0.1 (IPv4)
-        Write-Host "Starting Ollama service..."
-        $OllamaRunning = $false
-        try {
-            $null = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 3
-            $OllamaRunning = $true
-        } catch {}
-
-        if (-not $OllamaRunning) {
-            # API not responding — start ollama serve regardless of desktop app state
-            Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden -ErrorAction SilentlyContinue
-            Write-Host "  Waiting for Ollama to start..." -ForegroundColor DarkGray
-
-            $Retries = 15
-            $TriedDesktopApp = $false
-            while ($Retries -gt 0 -and -not $OllamaRunning) {
-                Start-Sleep -Seconds 2
-                try {
-                    $null = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 2
-                    $OllamaRunning = $true
-                } catch {
-                    $Retries--
-                    # After several retries, try desktop app if CLI serve died
-                    if ($Retries -eq 10 -and -not $TriedDesktopApp) {
-                        $TriedDesktopApp = $true
-                        $CliAlive = Get-Process -Name "ollama" -ErrorAction SilentlyContinue
-                        if (-not $CliAlive) {
-                            $OllamaAppPath = "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"
-                            if (Test-Path $OllamaAppPath) {
-                                Write-Host "  Trying Ollama desktop app..." -ForegroundColor DarkGray
-                                Start-Process -FilePath $OllamaAppPath -WindowStyle Minimized -ErrorAction SilentlyContinue
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (-not $OllamaRunning) {
-            Write-Fail "Could not start Ollama service" "Please start Ollama manually and run this installer again."
-        }
-        Write-Success "Ollama service running"
-
-        # Create scheduled task for Ollama auto-start (Windows keepalive equivalent)
-        try {
-            $TaskName = "LucidOllamaKeepAlive"
-            $ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-
-            if (-not $ExistingTask) {
-                $OllamaPath = (Get-Command ollama -ErrorAction SilentlyContinue).Source
-                if ($OllamaPath) {
-                    $Action = New-ScheduledTaskAction -Execute $OllamaPath -Argument "serve"
-                    $Trigger = New-ScheduledTaskTrigger -AtLogOn
-                    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-                    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Description "Keeps Ollama running for Lucid Memory" | Out-Null
-                    Write-Success "Ollama auto-start configured"
-                }
-            }
-        } catch {
-            Write-Warn "Could not configure Ollama auto-start. You may need to start Ollama manually after reboots."
-        }
-
-        # Pull the embedding model
-        Write-Host "Downloading embedding model (this may take a few minutes)..."
-        # Run via cmd /c — ollama writes download progress to stderr which
-        # triggers NativeCommandError in PS 5.1 with ErrorActionPreference=Stop
-        cmd /c "ollama pull nomic-embed-text 2>&1"
-        if ($LASTEXITCODE -ne 0) {
-            Write-Fail "Failed to download embedding model" "Please try manually: ollama pull nomic-embed-text"
-        }
-        Write-Success "Embedding model ready"
-    }
+Write-Host "  Optional: provide an OpenAI API key to use cloud embeddings instead."
+Write-Host ""
+$OpenAIKey = Read-Host "OpenAI API key (press Enter to skip)"
+if ($OpenAIKey) {
+    Write-Utf8 "$LucidDir\.env" "OPENAI_API_KEY=$OpenAIKey"
+    Write-Success "OpenAI configured as embedding provider"
+} else {
+    Write-Success "Using built-in BGE embeddings (recommended)"
 }
 Show-Progress  # Step 5: Embedding provider
 
-# === Download Whisper Model for Transcription ===
+# === Download Models ===
 
 $LucidModels = "$LucidDir\models"
 New-Item -ItemType Directory -Force -Path $LucidModels | Out-Null
 
+# BGE embedding model (FP16 ONNX, ~220MB) — downloaded from HuggingFace CDN
+$BgeModelUrl = "https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_fp16.onnx"
+$BgeTokenizerUrl = "https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/tokenizer.json"
+
+$BgeModel = "$LucidModels\bge-base-en-v1.5-fp16.onnx"
+if (-not (Test-Path $BgeModel)) {
+    Write-Host ""
+    Write-Host "Downloading BGE embedding model (~220MB)..."
+    try {
+        $OldProgress = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -UseBasicParsing -Uri $BgeModelUrl -OutFile "$BgeModel.tmp"
+        $ProgressPreference = $OldProgress
+        # Validate file is actually a model (>100MB), not a CDN error page
+        $FileSize = (Get-Item "$BgeModel.tmp").Length
+        if ($FileSize -gt 100000000) {
+            Move-Item "$BgeModel.tmp" $BgeModel -Force
+            Write-Success "BGE embedding model downloaded"
+        } else {
+            Remove-Item "$BgeModel.tmp" -Force -ErrorAction SilentlyContinue
+            Write-Warn "Downloaded BGE model is too small ($FileSize bytes) - may be corrupted"
+        }
+    } catch {
+        $ProgressPreference = $OldProgress
+        Remove-Item "$BgeModel.tmp" -Force -ErrorAction SilentlyContinue
+        Remove-Item $BgeModel -Force -ErrorAction SilentlyContinue
+        Write-Warn "Could not download BGE model - embeddings will fall back to OpenAI if available"
+    }
+} else {
+    Write-Success "BGE embedding model already present"
+}
+
+$BgeTokenizer = "$LucidModels\bge-base-en-v1.5-tokenizer.json"
+if (-not (Test-Path $BgeTokenizer)) {
+    Write-Host "Downloading BGE tokenizer..."
+    try {
+        $OldProgress = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -UseBasicParsing -Uri $BgeTokenizerUrl -OutFile "$BgeTokenizer.tmp"
+        $ProgressPreference = $OldProgress
+        Move-Item "$BgeTokenizer.tmp" $BgeTokenizer -Force
+        Write-Success "BGE tokenizer downloaded"
+    } catch {
+        $ProgressPreference = $OldProgress
+        Remove-Item "$BgeTokenizer.tmp" -Force -ErrorAction SilentlyContinue
+        Remove-Item $BgeTokenizer -Force -ErrorAction SilentlyContinue
+        Write-Warn "Could not download BGE tokenizer"
+    }
+} else {
+    Write-Success "BGE tokenizer already present"
+}
+
+# Whisper model for video transcription (74MB)
 $WhisperModel = "$LucidModels\ggml-base.en.bin"
 if (-not (Test-Path $WhisperModel)) {
     Write-Host ""
     Write-Host "Downloading Whisper model for video transcription (74MB)..."
     try {
-        Invoke-WebRequest -UseBasicParsing -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" -OutFile $WhisperModel
+        $OldProgress = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -UseBasicParsing -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" -OutFile "$WhisperModel.tmp"
+        $ProgressPreference = $OldProgress
+        Move-Item "$WhisperModel.tmp" $WhisperModel -Force
         Write-Success "Whisper model downloaded"
     } catch {
+        $ProgressPreference = $OldProgress
+        Remove-Item "$WhisperModel.tmp" -Force -ErrorAction SilentlyContinue
+        Remove-Item $WhisperModel -Force -ErrorAction SilentlyContinue
         Write-Warn "Could not download Whisper model - video transcription will be unavailable"
         Write-Host "  To download manually: Invoke-WebRequest -Uri 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin' -OutFile '$WhisperModel'"
     }

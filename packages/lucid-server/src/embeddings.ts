@@ -2,7 +2,7 @@
  * Embedding Pipeline
  *
  * Converts text to vectors for semantic search.
- * Supports Ollama (local, free) and OpenAI (cloud, paid).
+ * Supports native in-process ONNX (BGE-base-en-v1.5), Ollama (legacy), and OpenAI (cloud).
  */
 
 import {
@@ -85,7 +85,7 @@ function logWarn(message: string): void {
 	}
 }
 
-export type EmbeddingProvider = "ollama" | "openai"
+export type EmbeddingProvider = "native" | "ollama" | "openai"
 
 export interface EmbeddingConfig {
 	provider: EmbeddingProvider
@@ -104,6 +104,67 @@ const defaultOllamaHost = "http://localhost:11434"
 const defaultOllamaModel = "nomic-embed-text"
 const defaultOpenaiModel = "text-embedding-3-small"
 
+// Native embedding module (loaded with try/catch)
+let nativeEmbedding: {
+	loadEmbeddingModel: (
+		modelPath?: string | null,
+		tokenizerPath?: string | null
+	) => boolean
+	isEmbeddingModelLoaded: () => boolean
+	isEmbeddingModelAvailable: (
+		modelPath?: string | null,
+		tokenizerPath?: string | null
+	) => boolean
+	embed: (text: string) => { vector: number[]; model: string; dimensions: number }
+	embedBatch: (
+		texts: string[]
+	) => Array<{ vector: number[]; model: string; dimensions: number }>
+} | null = null
+
+try {
+	// biome-ignore lint/style/noCommonJs: Dynamic require for native module with fallback
+	const native = require("@lucid-memory/native")
+	if (native.loadEmbeddingModel) {
+		nativeEmbedding = native
+	}
+} catch {
+	// Native module not available
+}
+
+/**
+ * Try to load the native embedding model. Returns true if loaded.
+ */
+export function loadNativeEmbeddingModel(
+	modelPath?: string,
+	tokenizerPath?: string
+): boolean {
+	if (!nativeEmbedding) return false
+	try {
+		return nativeEmbedding.loadEmbeddingModel(
+			modelPath ?? null,
+			tokenizerPath ?? null
+		)
+	} catch (error) {
+		logError(
+			"Failed to load native embedding model",
+			error instanceof Error ? error : new Error(String(error))
+		)
+		return false
+	}
+}
+
+/**
+ * Check if native embedding model files exist.
+ */
+export function isNativeEmbeddingAvailable(): boolean {
+	if (!nativeEmbedding) return false
+	try {
+		return nativeEmbedding.isEmbeddingModelAvailable(null, null)
+	} catch {
+		return false
+	}
+}
+
 /**
  * Embedding client for generating vectors from text.
  */
@@ -118,6 +179,9 @@ export class EmbeddingClient {
 	 * Generate embedding for a single text.
 	 */
 	embed(text: string): Promise<EmbeddingResult> {
+		if (this.config.provider === "native") {
+			return this.embedNative(text)
+		}
 		if (this.config.provider === "ollama") {
 			return this.embedOllama(text)
 		}
@@ -128,8 +192,10 @@ export class EmbeddingClient {
 	 * Generate embeddings for multiple texts.
 	 */
 	async embedBatch(texts: string[]): Promise<EmbeddingResult[]> {
+		if (this.config.provider === "native") {
+			return this.embedNativeBatch(texts)
+		}
 		if (this.config.provider === "openai") {
-			// OpenAI supports batch embedding
 			return this.embedOpenAIBatch(texts)
 		}
 
@@ -146,14 +212,16 @@ export class EmbeddingClient {
 	 */
 	async isAvailable(): Promise<boolean> {
 		try {
+			if (this.config.provider === "native") {
+				return nativeEmbedding?.isEmbeddingModelLoaded() ?? false
+			}
 			if (this.config.provider === "ollama") {
 				const host = this.config.ollamaHost ?? defaultOllamaHost
 				const response = await fetch(`${host}/api/tags`)
 				return response.ok
-			} else {
-				// Just check if API key exists
-				return !!this.config.openaiApiKey
 			}
+			// OpenAI: just check if API key exists
+			return !!this.config.openaiApiKey
 		} catch {
 			return false
 		}
@@ -163,6 +231,9 @@ export class EmbeddingClient {
 	 * Get the model being used.
 	 */
 	getModel(): string {
+		if (this.config.provider === "native") {
+			return "bge-base-en-v1.5"
+		}
 		if (this.config.provider === "ollama") {
 			return this.config.model ?? defaultOllamaModel
 		}
@@ -170,7 +241,35 @@ export class EmbeddingClient {
 	}
 
 	// ============================================================================
-	// Ollama Implementation
+	// Native (In-Process ONNX) Implementation
+	// ============================================================================
+
+	private async embedNative(text: string): Promise<EmbeddingResult> {
+		if (!nativeEmbedding) {
+			throw new Error("Native embedding module not available")
+		}
+		const result = nativeEmbedding.embed(text)
+		return {
+			vector: result.vector,
+			model: result.model,
+			dimensions: result.dimensions,
+		}
+	}
+
+	private async embedNativeBatch(texts: string[]): Promise<EmbeddingResult[]> {
+		if (!nativeEmbedding) {
+			throw new Error("Native embedding module not available")
+		}
+		const results = nativeEmbedding.embedBatch(texts)
+		return results.map((r) => ({
+			vector: r.vector,
+			model: r.model,
+			dimensions: r.dimensions,
+		}))
+	}
+
+	// ============================================================================
+	// Ollama Implementation (Legacy)
 	// ============================================================================
 
 	private async embedOllama(text: string): Promise<EmbeddingResult> {
@@ -276,9 +375,31 @@ export class EmbeddingClient {
 
 /**
  * Auto-detect the best available embedding provider.
+ *
+ * Priority: native → OpenAI (env var) → Ollama (legacy) → null
  */
 export async function detectProvider(): Promise<EmbeddingConfig | null> {
-	// Try Ollama first (local, free)
+	// 1. Try native in-process embeddings (zero deps, best UX)
+	if (nativeEmbedding?.isEmbeddingModelLoaded?.()) {
+		return { provider: "native", model: "bge-base-en-v1.5" }
+	}
+
+	// Check if native model files exist (even if not yet loaded)
+	if (isNativeEmbeddingAvailable()) {
+		// Model files exist — try loading
+		if (loadNativeEmbeddingModel()) {
+			return { provider: "native", model: "bge-base-en-v1.5" }
+		}
+	}
+
+	// 2. Check for OpenAI API key in environment
+	// biome-ignore lint/style/noProcessEnv: Config detection requires environment access
+	const openaiKey = process.env.OPENAI_API_KEY
+	if (openaiKey) {
+		return { provider: "openai", openaiApiKey: openaiKey }
+	}
+
+	// 3. Try Ollama (legacy fallback for users who have it installed)
 	try {
 		const response = await fetch(`${defaultOllamaHost}/api/tags`, {
 			signal: AbortSignal.timeout(2000),
@@ -295,20 +416,12 @@ export async function detectProvider(): Promise<EmbeddingConfig | null> {
 			}
 		}
 	} catch (error: unknown) {
-		// Ollama not available - log it
 		if (
 			error instanceof Error &&
 			(error.cause as { code?: string })?.code === "ECONNREFUSED"
 		) {
 			logWarn("Ollama not running during provider detection")
 		}
-	}
-
-	// Check for OpenAI API key in environment
-	// biome-ignore lint/style/noProcessEnv: Config detection requires environment access
-	const openaiKey = process.env.OPENAI_API_KEY
-	if (openaiKey) {
-		return { provider: "openai", openaiApiKey: openaiKey }
 	}
 
 	return null

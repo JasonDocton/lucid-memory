@@ -195,6 +195,42 @@ export class LucidRetrieval {
 	}
 
 	/**
+	 * Migrate stale embeddings when the model changes (e.g., nomic-embed-text → bge-base-en-v1.5).
+	 * Deletes old embeddings so the background processor re-generates them.
+	 */
+	migrateEmbeddingsIfNeeded(config: EmbeddingConfig): void {
+		const currentModel =
+			config.model ||
+			(config.provider === "native" ? "bge-base-en-v1.5" : "unknown")
+
+		const staleCount = this.storage.countEmbeddingsNotMatching(currentModel)
+		if (staleCount > 0) {
+			const deleted = this.storage.deleteEmbeddingsNotMatching(currentModel)
+			console.error(
+				`[lucid] Migrated ${deleted} text embeddings (model != ${currentModel})`
+			)
+		}
+
+		const staleVisualCount =
+			this.storage.countVisualEmbeddingsNotMatching(currentModel)
+		if (staleVisualCount > 0) {
+			const deleted =
+				this.storage.deleteVisualEmbeddingsNotMatching(currentModel)
+			console.error(
+				`[lucid] Migrated ${deleted} visual embeddings (model != ${currentModel})`
+			)
+		}
+
+		const totalMigrated = staleCount + staleVisualCount
+		if (totalMigrated > 0) {
+			const estimatedSeconds = Math.ceil(totalMigrated / 10) * 5
+			console.error(
+				`[lucid] Re-embedding ${totalMigrated} memories in background (~${estimatedSeconds}s). Run 'lucid status' to check progress.`
+			)
+		}
+	}
+
+	/**
 	 * Close the retrieval system and release resources.
 	 * LOW-5: Explicit cleanup of ephemeral state on shutdown.
 	 */

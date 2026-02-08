@@ -8,7 +8,7 @@
 #   2. Removes MCP server config from Claude Code
 #   3. Removes hooks from Claude Code
 #   4. Removes PATH entry
-#   5. Optionally removes Ollama embedding model
+#   5. Removes downloaded models
 
 $ErrorActionPreference = "Stop"
 
@@ -89,12 +89,6 @@ $LucidBin = "$LucidDir\bin"
 $CurrentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if ($CurrentPath -like "*$LucidBin*") {
     $RemoveList += "  ${C4}•${NC} PATH entry"
-}
-
-# Check for scheduled task
-$TaskName = "LucidOllamaKeepAlive"
-if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-    $RemoveList += "  ${C4}•${NC} Ollama scheduled task (auto-start)"
 }
 
 Write-Host "${BOLD}The following will be removed:${NC}"
@@ -181,49 +175,6 @@ if ($CurrentPath -like "*$LucidBin*") {
 }
 Write-Success "PATH entry removed"
 
-# === Remove Ollama Model (Optional) ===
-
-Write-Host ""
-$RemoveModel = Read-Host "  Remove Ollama embedding model (nomic-embed-text)? [y/N]"
-if ($RemoveModel -match "^[Yy]$") {
-    if (Get-Command ollama -ErrorAction SilentlyContinue) {
-        # ollama rm requires the service to be running
-        $OllamaUp = $false
-        try {
-            $null = Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/tags" -TimeoutSec 2
-            $OllamaUp = $true
-        } catch {}
-
-        if ($OllamaUp) {
-            Write-Info "Removing embedding model..."
-            cmd /c "ollama rm nomic-embed-text 2>&1" | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                Write-Success "Embedding model removed"
-            } else {
-                Write-Warn "Could not remove embedding model. Remove manually: ollama rm nomic-embed-text"
-            }
-        } else {
-            Write-Warn "Ollama service not running. To remove the model manually: ollama rm nomic-embed-text"
-        }
-    }
-}
-
-# === Remove Scheduled Task ===
-
-$TaskName = "LucidOllamaKeepAlive"
-$ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($ExistingTask) {
-    Write-Info "Removing Ollama scheduled task..."
-    try {
-        # Stop the task-launched ollama serve process before removing the task
-        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-        Write-Success "Scheduled task removed"
-    } catch {
-        Write-Warn "Could not remove scheduled task (may need admin). Remove manually: Unregister-ScheduledTask -TaskName $TaskName"
-    }
-}
-
 # === Stop Running Server Processes ===
 
 # Kill any Bun processes running Lucid Memory server/CLI files — these lock
@@ -245,9 +196,17 @@ try {
     # File may still be briefly locked — retry once
     Write-Host "  Waiting for file locks to release..." -ForegroundColor DarkGray
     Start-Sleep -Seconds 3
-    Remove-Item -Recurse -Force $LucidDir
+    try {
+        Remove-Item -Recurse -Force $LucidDir
+    } catch {
+        Write-Warn "Could not fully remove ~/.lucid — please delete it manually"
+    }
 }
-Write-Success "Lucid directory removed"
+if (-not (Test-Path $LucidDir)) {
+    Write-Success "Lucid directory removed"
+} else {
+    Write-Warn "Some files in ~/.lucid could not be removed"
+}
 
 # === Done ===
 
@@ -267,7 +226,7 @@ Write-Host ""
 Write-Host "  ${DIM}Note: The following dependencies may have been installed${NC}"
 Write-Host "  ${DIM}and can be removed manually if no longer needed:${NC}"
 Write-Host ""
-Write-Host "  ${DIM}  winget uninstall ffmpeg yt-dlp Ollama${NC}"
+Write-Host "  ${DIM}  winget uninstall ffmpeg yt-dlp${NC}"
 Write-Host "  ${DIM}  pip uninstall openai-whisper${NC}"
 Write-Host ""
 Write-Host "  ${DIM}To reinstall:${NC}"

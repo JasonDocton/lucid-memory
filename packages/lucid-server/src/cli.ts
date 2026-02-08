@@ -13,7 +13,11 @@
  *   lucid backup                             - Backup the memory database
  */
 
-import { detectProvider } from "./embeddings.ts"
+import {
+	detectProvider,
+	isNativeEmbeddingAvailable,
+	loadNativeEmbeddingModel,
+} from "./embeddings.ts"
 import { LucidRetrieval } from "./retrieval.ts"
 import type { MemoryType } from "./storage.ts"
 
@@ -99,6 +103,9 @@ async function main() {
 	const dbPath = resolveDbPath(config, LUCID_CLIENT)
 
 	const retrieval = new LucidRetrieval({ dbPath })
+
+	// Pre-load native embedding model before detection
+	loadNativeEmbeddingModel()
 
 	// Try to set up embeddings
 	const embeddingConfig = await detectProvider()
@@ -388,11 +395,10 @@ Examples:
 		case "status": {
 			const stats = retrieval.storage.getStats()
 			const hasEmbeddings = embeddingConfig !== null
-			let ollamaStatus = "not configured"
-			let isOllamaHealthy = false
-			let embeddingTestResult = "skipped"
+			let embeddingStatus = "not configured"
+			let isEmbeddingHealthy = false
 
-			console.log("🧠 Lucid Memory Status")
+			console.log("Lucid Memory Status")
 			console.log("━━━━━━━━━━━━━━━━━━━━━━")
 			console.log("")
 
@@ -402,8 +408,16 @@ Examples:
 			console.log(`  Mode: ${config.databaseMode || "shared"}`)
 			console.log("")
 
-			// Check Ollama health if configured
-			if (embeddingConfig?.provider === "ollama") {
+			// Check embedding health based on provider
+			if (embeddingConfig?.provider === "native") {
+				const modelAvailable = isNativeEmbeddingAvailable()
+				if (modelAvailable) {
+					embeddingStatus = "ready (in-process ONNX)"
+					isEmbeddingHealthy = true
+				} else {
+					embeddingStatus = "model files missing (~/.lucid/models/)"
+				}
+			} else if (embeddingConfig?.provider === "ollama") {
 				const ollamaHost =
 					embeddingConfig.ollamaHost || "http://localhost:11434"
 				try {
@@ -411,53 +425,31 @@ Examples:
 						signal: AbortSignal.timeout(3000),
 					})
 					if (response.ok) {
-						ollamaStatus = "running"
-						isOllamaHealthy = true
-
-						// Test actual embedding generation
-						try {
-							const testResponse = await fetch(`${ollamaHost}/api/embeddings`, {
-								method: "POST",
-								headers: { "Content-Type": "application/json" },
-								body: JSON.stringify({
-									model: embeddingConfig.model || "nomic-embed-text",
-									prompt: "test",
-								}),
-								signal: AbortSignal.timeout(10000),
-							})
-							if (testResponse.ok) {
-								embeddingTestResult = "✓ working"
-							} else {
-								embeddingTestResult = `✗ error: ${testResponse.status}`
-							}
-						} catch (e: unknown) {
-							const message = e instanceof Error ? e.message : String(e)
-							embeddingTestResult = `✗ failed: ${message}`
-						}
+						embeddingStatus = "running (Ollama)"
+						isEmbeddingHealthy = true
 					} else {
-						ollamaStatus = `error (HTTP ${response.status})`
+						embeddingStatus = `error (HTTP ${response.status})`
 					}
 				} catch (e: unknown) {
 					if (e instanceof Error) {
 						if (e.name === "TimeoutError") {
-							ollamaStatus = "✗ timeout (not responding)"
+							embeddingStatus = "timeout (not responding)"
 						} else if (
 							(e.cause as { code?: string })?.code === "ECONNREFUSED"
 						) {
-							ollamaStatus = "✗ not running"
+							embeddingStatus = "not running"
 						} else {
-							ollamaStatus = `✗ error: ${e.message}`
+							embeddingStatus = `error: ${e.message}`
 						}
 					} else {
-						ollamaStatus = `✗ error: ${String(e)}`
+						embeddingStatus = `error: ${String(e)}`
 					}
 				}
 			} else if (embeddingConfig?.provider === "openai") {
-				// For OpenAI, just check if key is set
-				ollamaStatus = "n/a (using OpenAI)"
-				embeddingTestResult = embeddingConfig.openaiApiKey
-					? "✓ API key configured"
-					: "✗ no API key"
+				embeddingStatus = embeddingConfig.openaiApiKey
+					? "ready (OpenAI API)"
+					: "no API key"
+				isEmbeddingHealthy = !!embeddingConfig.openaiApiKey
 			}
 
 			// Database status
@@ -472,11 +464,25 @@ Examples:
 			console.log("Embeddings:")
 			if (hasEmbeddings && embeddingConfig) {
 				console.log(`  Provider: ${embeddingConfig.provider}`)
-				console.log(`  Model: ${embeddingConfig.model || "default"}`)
-				if (embeddingConfig.provider === "ollama") {
-					console.log(`  Ollama: ${ollamaStatus}`)
+				console.log(`  Model: ${embeddingConfig.model || "bge-base-en-v1.5"}`)
+				console.log(
+					`  Status: ${isEmbeddingHealthy ? "✓" : "✗"} ${embeddingStatus}`
+				)
+				const totalPending =
+					stats.pendingEmbeddingCount + stats.pendingVisualEmbeddingCount
+				if (totalPending > 0) {
+					const parts: string[] = []
+					if (stats.pendingEmbeddingCount > 0)
+						parts.push(`${stats.pendingEmbeddingCount} text`)
+					if (stats.pendingVisualEmbeddingCount > 0)
+						parts.push(`${stats.pendingVisualEmbeddingCount} visual`)
+					const estimatedSeconds = Math.ceil(totalPending / 10) * 5
+					console.log(
+						`  Pending: ${parts.join(" + ")} memories awaiting embedding (~${estimatedSeconds}s)`
+					)
+				} else {
+					console.log("  Coverage: all memories embedded")
 				}
-				console.log(`  Status: ${embeddingTestResult}`)
 			} else {
 				console.log("  ✗ No embedding provider configured")
 			}
@@ -560,10 +566,7 @@ Examples:
 
 			// Overall health
 			const videoHealthy = hasFfmpeg && hasYtdlp && hasWhisper
-			const healthy =
-				hasEmbeddings &&
-				(isOllamaHealthy || embeddingConfig?.provider === "openai") &&
-				videoHealthy
+			const healthy = hasEmbeddings && isEmbeddingHealthy && videoHealthy
 			if (healthy) {
 				console.log("Overall: ✓ Healthy")
 			} else {
@@ -572,11 +575,18 @@ Examples:
 				console.log("Troubleshooting:")
 				if (!hasEmbeddings) {
 					console.log("  - No embedding provider found. Re-run the installer.")
-				} else if (embeddingConfig?.provider === "ollama" && !isOllamaHealthy) {
-					console.log("  - Ollama is not running. Start it with: ollama serve")
+				} else if (
+					embeddingConfig?.provider === "native" &&
+					!isEmbeddingHealthy
+				) {
 					console.log(
-						"  - Or check if the model is installed: ollama pull nomic-embed-text"
+						"  - Native model files missing. Re-run the installer to download BGE model."
 					)
+				} else if (
+					embeddingConfig?.provider === "ollama" &&
+					!isEmbeddingHealthy
+				) {
+					console.log("  - Ollama is not running. Start it with: ollama serve")
 				}
 				if (!hasFfmpeg) {
 					console.log(

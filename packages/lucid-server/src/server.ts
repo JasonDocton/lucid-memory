@@ -18,7 +18,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
-import { detectProvider } from "./embeddings.ts"
+import { detectProvider, loadNativeEmbeddingModel } from "./embeddings.ts"
 import { LucidRetrieval } from "./retrieval.ts"
 
 // === Multi-Client Configuration ===
@@ -115,6 +115,9 @@ let hasSemanticSearch = false
  */
 async function initializeEmbeddings(): Promise<void> {
 	try {
+		// Pre-load native embedding model before detection
+		loadNativeEmbeddingModel()
+
 		const config = await detectProvider()
 		if (config) {
 			retrieval.setEmbeddingConfig(config)
@@ -122,6 +125,9 @@ async function initializeEmbeddings(): Promise<void> {
 			console.error(
 				`[lucid] Embedding provider: ${config.provider} (${config.model || "default"})`
 			)
+
+			// Migrate stale embeddings if model changed
+			retrieval.migrateEmbeddingsIfNeeded(config)
 		} else {
 			console.error(
 				"[lucid] ⚠️  No embedding provider found - using recency-only retrieval"

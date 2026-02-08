@@ -556,6 +556,113 @@ pub fn version() -> String {
 }
 
 // ============================================================================
+// Embedding (In-Process ONNX)
+// ============================================================================
+
+use std::sync::OnceLock;
+
+static EMBEDDING_MODEL: OnceLock<lucid_core::embedding::EmbeddingModel> = OnceLock::new();
+
+/// Embedding result returned to JavaScript.
+#[napi(object)]
+pub struct JsEmbeddingResult {
+	/// The embedding vector (768 dimensions).
+	pub vector: Vec<f64>,
+	/// Model name.
+	pub model: String,
+	/// Number of dimensions.
+	pub dimensions: u32,
+}
+
+/// Load the BGE-base-en-v1.5 embedding model from disk.
+///
+/// Call this once at startup. Subsequent calls are no-ops.
+/// Returns true if the model is loaded (or was already loaded).
+#[napi]
+pub fn load_embedding_model(
+	model_path: Option<String>,
+	tokenizer_path: Option<String>,
+) -> napi::Result<bool> {
+	if EMBEDDING_MODEL.get().is_some() {
+		return Ok(true);
+	}
+
+	let config = lucid_core::embedding::EmbeddingModelConfig {
+		model_path: model_path.map(std::path::PathBuf::from),
+		tokenizer_path: tokenizer_path.map(std::path::PathBuf::from),
+	};
+
+	match lucid_core::embedding::EmbeddingModel::load(&config) {
+		Ok(model) => {
+			let _ = EMBEDDING_MODEL.set(model);
+			Ok(true)
+		}
+		Err(e) => Err(napi::Error::from_reason(format!(
+			"Failed to load embedding model: {e}"
+		))),
+	}
+}
+
+/// Check if the embedding model is currently loaded.
+#[napi]
+pub fn is_embedding_model_loaded() -> bool {
+	EMBEDDING_MODEL.get().is_some()
+}
+
+/// Check if model files exist at the given (or default) paths.
+#[napi]
+pub fn is_embedding_model_available(
+	model_path: Option<String>,
+	tokenizer_path: Option<String>,
+) -> bool {
+	let config = lucid_core::embedding::EmbeddingModelConfig {
+		model_path: model_path.map(std::path::PathBuf::from),
+		tokenizer_path: tokenizer_path.map(std::path::PathBuf::from),
+	};
+	lucid_core::embedding::EmbeddingModel::is_available(&config)
+}
+
+/// Embed a single text. Returns { vector, model, dimensions }.
+#[napi]
+pub fn embed(text: String) -> napi::Result<JsEmbeddingResult> {
+	let model = EMBEDDING_MODEL.get().ok_or_else(|| {
+		napi::Error::from_reason("Embedding model not loaded. Call loadEmbeddingModel() first.")
+	})?;
+
+	let vector_f32 = model
+		.embed(&text)
+		.map_err(|e| napi::Error::from_reason(format!("Embedding failed: {e}")))?;
+
+	Ok(JsEmbeddingResult {
+		vector: vector_f32.into_iter().map(f64::from).collect(),
+		model: model.model_name().to_string(),
+		dimensions: model.dimensions() as u32,
+	})
+}
+
+/// Embed a batch of texts.
+#[napi]
+pub fn embed_batch(texts: Vec<String>) -> napi::Result<Vec<JsEmbeddingResult>> {
+	let model = EMBEDDING_MODEL.get().ok_or_else(|| {
+		napi::Error::from_reason("Embedding model not loaded. Call loadEmbeddingModel() first.")
+	})?;
+
+	let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+	let vectors = model
+		.embed_batch(&text_refs)
+		.map_err(|e| napi::Error::from_reason(format!("Batch embedding failed: {e}")))?;
+
+	Ok(vectors
+		.into_iter()
+		.map(|v| JsEmbeddingResult {
+			vector: v.into_iter().map(f64::from).collect(),
+			model: model.model_name().to_string(),
+			dimensions: model.dimensions() as u32,
+		})
+		.collect())
+}
+
+// ============================================================================
 // Location Intuitions (Spatial Memory)
 // ============================================================================
 

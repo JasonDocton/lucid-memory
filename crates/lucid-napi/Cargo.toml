@@ -14,7 +14,7 @@ categories = ["api-bindings", "memory-management"]
 crate-type = ["cdylib"]
 
 [dependencies]
-lucid-core = { path = "../lucid-core" }
+lucid-core = { path = "../lucid-core", features = ["embedding"] }
 napi = { workspace = true }
 napi-derive = { workspace = true }
 serde = { workspace = true }

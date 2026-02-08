@@ -10,7 +10,7 @@
 #   2. Removes MCP server config from Claude Code
 #   3. Removes hooks from Claude Code
 #   4. Removes PATH entry from shell config
-#   5. Optionally removes Ollama embedding model
+#   5. Removes downloaded models
 
 set -e
 
@@ -100,12 +100,6 @@ if grep -q "/.lucid/bin" "$HOME/.zshrc" 2>/dev/null || \
    grep -q "/.lucid/bin" "$HOME/.profile" 2>/dev/null || \
    grep -q "/.lucid/bin" "$HOME/.config/fish/config.fish" 2>/dev/null; then
     REMOVE_LIST="${REMOVE_LIST}\n  ${C4}•${NC} PATH entry from shell config"
-fi
-
-# Check for LaunchAgent
-PLIST_FILE="$HOME/Library/LaunchAgents/com.lucid.ollama.plist"
-if [ -f "$PLIST_FILE" ]; then
-    REMOVE_LIST="${REMOVE_LIST}\n  ${C4}•${NC} Ollama LaunchAgent (auto-start)"
 fi
 
 echo -e "${BOLD}The following will be removed:${NC}"
@@ -277,31 +271,6 @@ remove_path_entry "$HOME/.config/fish/config.fish"
 
 success "PATH entry removed"
 
-# === Remove Ollama Model (Optional) ===
-
-if [ "$INTERACTIVE" = true ]; then
-    echo ""
-    read -p "  Remove Ollama embedding model (nomic-embed-text)? [y/N]: " REMOVE_MODEL
-    if [[ "$REMOVE_MODEL" =~ ^[Yy]$ ]]; then
-        if command -v ollama &> /dev/null; then
-            info "Removing embedding model..."
-            ollama rm nomic-embed-text 2>/dev/null || true
-            success "Embedding model removed"
-        fi
-    fi
-fi
-
-# === Remove macOS LaunchAgent ===
-
-PLIST_FILE="$HOME/Library/LaunchAgents/com.lucid.ollama.plist"
-if [ -f "$PLIST_FILE" ]; then
-    info "Removing Ollama LaunchAgent..."
-    launchctl bootout "gui/$(id -u)" "$PLIST_FILE" 2>/dev/null || \
-        launchctl unload "$PLIST_FILE" 2>/dev/null || true
-    rm -f "$PLIST_FILE"
-    success "LaunchAgent removed"
-fi
-
 # === Remove Lucid Directory ===
 
 info "Removing ~/.lucid directory..."
@@ -326,7 +295,7 @@ echo ""
 echo -e "  ${DIM}Note: The following dependencies may have been installed${NC}"
 echo -e "  ${DIM}and can be removed manually if no longer needed:${NC}"
 echo ""
-echo -e "  ${DIM}  macOS:   brew uninstall ffmpeg yt-dlp ollama${NC}"
+echo -e "  ${DIM}  macOS:   brew uninstall ffmpeg yt-dlp${NC}"
 echo -e "  ${DIM}  pip:     pip uninstall openai-whisper${NC}"
 echo ""
 echo -e "  ${DIM}To reinstall:${NC}"

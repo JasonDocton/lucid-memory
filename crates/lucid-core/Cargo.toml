@@ -11,10 +11,20 @@ repository.workspace = true
 keywords = ["memory", "retrieval", "act-r", "spreading-activation", "ai"]
 categories = ["science", "algorithms"]
 
+[features]
+default = []
+embedding = ["dep:ort", "dep:tokenizers", "dep:ndarray", "dep:dirs"]
+
 [dependencies]
 serde = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
+
+# Embedding (optional, behind feature flag)
+ort = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
+ndarray = { workspace = true, optional = true }
+dirs = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
