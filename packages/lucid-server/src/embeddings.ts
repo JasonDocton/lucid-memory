@@ -248,6 +248,7 @@ export class EmbeddingClient {
 	// Native (In-Process ONNX) Implementation
 	// ============================================================================
 
+	// biome-ignore lint/suspicious/useAwait: matches async interface of other providers (Ollama, OpenAI)
 	private async embedNative(text: string): Promise<EmbeddingResult> {
 		if (!nativeEmbedding) {
 			throw new Error("Native embedding module not available")
@@ -260,6 +261,7 @@ export class EmbeddingClient {
 		}
 	}
 
+	// biome-ignore lint/suspicious/useAwait: matches async interface of other providers (Ollama, OpenAI)
 	private async embedNativeBatch(texts: string[]): Promise<EmbeddingResult[]> {
 		if (!nativeEmbedding) {
 			throw new Error("Native embedding module not available")

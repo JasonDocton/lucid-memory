@@ -893,6 +893,65 @@ server.tool(
 )
 
 /**
+ * visual_list - List visual memories with optional filters
+ */
+server.tool(
+	"visual_list",
+	"List visual memories with optional filters. Use for browsing without semantic search.",
+	{
+		mediaType: z
+			.enum(["image", "video"])
+			.optional()
+			.describe("Filter by media type"),
+		sharedBy: z.string().optional().describe("Filter by who shared it"),
+		minSignificance: z
+			.number()
+			.min(0)
+			.max(1)
+			.optional()
+			.describe("Minimum significance threshold"),
+		limit: z
+			.number()
+			.min(1)
+			.max(50)
+			.optional()
+			.default(20)
+			.describe("Max results"),
+	},
+	async ({ mediaType, sharedBy, minSignificance, limit }) => {
+		try {
+			const visuals = retrieval.storage.queryVisualMemories({
+				mediaType,
+				sharedBy,
+				minSignificance,
+				limit,
+			})
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: JSON.stringify({
+							count: visuals.length,
+							visuals: visuals.map((v) => ({
+								id: v.id,
+								description: v.description,
+								mediaType: v.mediaType,
+								objects: v.objects,
+								significance: v.significance,
+								sharedBy: v.sharedBy,
+								receivedAt: new Date(v.receivedAt).toISOString(),
+							})),
+						}),
+					},
+				],
+			}
+		} catch (error) {
+			return toolError("visual_list", error)
+		}
+	}
+)
+
+/**
  * visual_delete - Delete a visual memory
  */
 server.tool(
@@ -1108,13 +1167,16 @@ server.tool(
 
 server.tool(
 	"memory_consolidation_status",
-	"Get memory consolidation diagnostics — shows consolidation state distribution and association stats.",
+	"Get memory consolidation diagnostics — shows consolidation state distribution, association stats, episode info, and embedding health.",
 	{},
 	async () => {
 		try {
 			const counts = retrieval.storage.getConsolidationCounts()
 			const associations = retrieval.storage.getAllAssociations()
 			const weakCount = associations.filter((a) => a.strength < 0.1).length
+			const recentEpisodes = retrieval.storage.getRecentEpisodes(undefined, 5)
+			const pendingEmbeddings =
+				retrieval.storage.getMemoriesWithoutEmbeddings(1000)
 			return {
 				content: [
 					{
@@ -1129,6 +1191,22 @@ server.tool(
 										? associations.reduce((sum, a) => sum + a.strength, 0) /
 											associations.length
 										: 0,
+							},
+							episodes: {
+								recentCount: recentEpisodes.length,
+								recent: recentEpisodes.map((ep) => ({
+									id: ep.id,
+									boundaryType: ep.boundaryType,
+									eventCount:
+										retrieval.storage.getEpisodeEvents(ep.id).length,
+									startedAt: new Date(ep.startedAt).toISOString(),
+									endedAt: ep.endedAt
+										? new Date(ep.endedAt).toISOString()
+										: "active",
+								})),
+							},
+							embeddings: {
+								pending: pendingEmbeddings.length,
 							},
 							config: {
 								consolidationEnabled: ConsolidationConfig.enabled,

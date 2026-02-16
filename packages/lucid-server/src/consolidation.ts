@@ -187,6 +187,8 @@ export class ConsolidationEngine {
 			const now = Date.now()
 			const oneDayMs = 24 * 60 * 60 * 1000
 			for (const v of visuals) {
+				const hasEmbed = this.storage.getVisualEmbedding(v.id) !== null
+				if (!hasEmbed) continue // still being processed, don't prune yet
 				const daysSinceAccess =
 					(now - (v.lastAccessed ?? v.createdAt)) / oneDayMs
 				if (

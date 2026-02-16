@@ -907,6 +907,18 @@ export class LucidStorage {
 	}
 
 	/**
+	 * Check if memory has an embedding.
+	 */
+	hasEmbedding(memoryId: string): boolean {
+		const row = this.db
+			.prepare(`
+      SELECT 1 FROM embeddings WHERE memory_id = ?
+    `)
+			.get(memoryId)
+		return !!row
+	}
+
+	/**
 	 * Get memories missing embeddings.
 	 */
 	getMemoriesWithoutEmbeddings(limit = 100): Memory[] {
@@ -1287,6 +1299,17 @@ export class LucidStorage {
 	}
 
 	/**
+	 * Get an episode by ID.
+	 */
+	getEpisode(id: string): Episode | null {
+		const row = this.db
+			.prepare(`SELECT * FROM episodes WHERE id = ?`)
+			.get(id) as EpisodeRow | null
+
+		return row ? this.rowToEpisode(row) : null
+	}
+
+	/**
 	 * End an episode (set ended_at timestamp).
 	 */
 	endEpisode(id: string): boolean {
@@ -1507,6 +1530,20 @@ export class LucidStorage {
 			.run(id, path, name ?? null, now)
 
 		return { id, path, name: name ?? null, lastActive: now, context: {} }
+	}
+
+	/**
+	 * Update project context.
+	 */
+	updateProjectContext(
+		projectId: string,
+		context: Record<string, unknown>
+	): void {
+		this.db
+			.prepare(`
+      UPDATE projects SET context = ?, last_active = ? WHERE id = ?
+    `)
+			.run(JSON.stringify(context), Date.now(), projectId)
 	}
 
 	// ============================================================================
@@ -2723,6 +2760,28 @@ export class LucidStorage {
 	}
 
 	/**
+	 * Get embedding for a visual memory.
+	 */
+	getVisualEmbedding(visualMemoryId: string): number[] | null {
+		const row = this.db
+			.prepare(
+				`SELECT vector FROM visual_embeddings WHERE visual_memory_id = ?`
+			)
+			.get(visualMemoryId) as { vector: Uint8Array } | null
+
+		if (!row) return null
+
+		// LOW-4: Use spread operator instead of Array.from() for better performance
+		return [
+			...new Float32Array(
+				row.vector.buffer,
+				row.vector.byteOffset,
+				row.vector.byteLength / 4
+			),
+		]
+	}
+
+	/**
 	 * Get all visual embeddings (for batch similarity operations).
 	 */
 	getAllVisualEmbeddings(): Map<string, number[]> {
@@ -2794,6 +2853,48 @@ export class LucidStorage {
 		const significanceScores = visuals.map((v) => v.significance)
 
 		return { visuals, accessHistories, emotionalWeights, significanceScores }
+	}
+
+	/**
+	 * Query visual memories with filters.
+	 */
+	queryVisualMemories(
+		options: {
+			mediaType?: VisualMediaType
+			sharedBy?: string
+			limit?: number
+			minSignificance?: number
+		} = {}
+	): VisualMemory[] {
+		const conditions: string[] = []
+		const values: (string | number)[] = []
+
+		if (options.mediaType) {
+			conditions.push("media_type = ?")
+			values.push(options.mediaType)
+		}
+		if (options.sharedBy) {
+			conditions.push("shared_by = ?")
+			values.push(options.sharedBy)
+		}
+		if (options.minSignificance !== undefined) {
+			conditions.push("significance >= ?")
+			values.push(options.minSignificance)
+		}
+
+		const where =
+			conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""
+		const limit = options.limit ?? 100
+
+		const rows = this.db
+			.prepare(`
+      SELECT * FROM visual_memories ${where}
+      ORDER BY received_at DESC
+      LIMIT ?
+    `)
+			.all(...values, limit) as VisualMemoryRow[]
+
+		return rows.map((r) => this.rowToVisualMemory(r))
 	}
 
 	/**

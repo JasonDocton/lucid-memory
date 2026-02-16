@@ -1313,6 +1313,27 @@ export class LucidRetrieval {
 		// Activate PRP for high-importance memories
 		this.activatePrp(memory.id, ew)
 
+		// Accumulate project metadata
+		if (options.projectId) {
+			const project = this.storage.getOrCreateProject(options.projectId)
+			const context = project.context as Record<string, unknown>
+			const memoryCount = ((context.memoryCount as number) ?? 0) + 1
+			const typesSeen = ((context.typesSeen as string[]) ?? []).slice()
+			const memType = options.type ?? "learning"
+			if (!typesSeen.includes(memType)) typesSeen.push(memType)
+			const allTags = ((context.allTags as string[]) ?? []).slice()
+			for (const tag of options.tags ?? []) {
+				if (!allTags.includes(tag)) allTags.push(tag)
+			}
+			this.storage.updateProjectContext(project.id, {
+				...context,
+				memoryCount,
+				typesSeen,
+				allTags,
+				lastMemoryAt: Date.now(),
+			})
+		}
+
 		// Generate and store embedding if embedder is available
 		if (this.embedder) {
 			try {
@@ -1324,7 +1345,7 @@ export class LucidRetrieval {
 				)
 
 				// Auto-associate with recent similar memories
-				this.createAutoAssociations(
+				await this.createAutoAssociations(
 					memory.id,
 					embedding.vector,
 					options.projectId
@@ -1438,11 +1459,12 @@ export class LucidRetrieval {
 	 *
 	 * Association strength is based on semantic similarity (0.4-1.0 → 0.4-1.0 strength).
 	 */
-	private createAutoAssociations(
+	// biome-ignore lint/suspicious/useAwait: kept async for future embedding work
+	private async createAutoAssociations(
 		memoryId: string,
 		embedding: number[],
 		projectId?: string
-	): void {
+	): Promise<void> {
 		const now = Date.now()
 		const cutoff = now - this.autoAssociationRecencyMs
 
