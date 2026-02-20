@@ -716,11 +716,22 @@ if [ "$NATIVE_READY" = false ] && [ -n "$NATIVE_BINARY" ]; then
     echo "Downloading pre-built native binary..."
     RELEASE_URL="https://github.com/JasonDocton/lucid-memory/releases/latest/download/$NATIVE_BINARY"
     if curl -fsSL "$RELEASE_URL" -o "$LUCID_DIR/native/$NATIVE_BINARY" 2>/dev/null; then
-        # Validate the downloaded file is non-empty
+        # Validate the downloaded file is non-empty and correct format
         if [ -s "$LUCID_DIR/native/$NATIVE_BINARY" ]; then
-            chmod +x "$LUCID_DIR/native/$NATIVE_BINARY"
-            success "Downloaded native binary"
-            NATIVE_READY=true
+            FILE_TYPE=$(file -b "$LUCID_DIR/native/$NATIVE_BINARY" 2>/dev/null || echo "unknown")
+            case "$(uname -s)" in
+                Darwin) EXPECTED="Mach-O" ;;
+                Linux)  EXPECTED="ELF" ;;
+                *)      EXPECTED="" ;;
+            esac
+            if [ -n "$EXPECTED" ] && ! echo "$FILE_TYPE" | grep -q "$EXPECTED"; then
+                rm -f "$LUCID_DIR/native/$NATIVE_BINARY"
+                echo "  Downloaded binary has wrong format ($FILE_TYPE), skipping"
+            else
+                chmod +x "$LUCID_DIR/native/$NATIVE_BINARY"
+                success "Downloaded native binary"
+                NATIVE_READY=true
+            fi
         else
             rm -f "$LUCID_DIR/native/$NATIVE_BINARY"
             echo "  Downloaded binary was empty, skipping"
@@ -825,11 +836,22 @@ if [ "$PERCEPTION_READY" = false ] && [ -n "$PERCEPTION_BINARY" ] && [ -d "$LUCI
     echo "Downloading pre-built perception binary..."
     PERCEPTION_RELEASE_URL="https://github.com/JasonDocton/lucid-memory/releases/latest/download/$PERCEPTION_BINARY"
     if curl -fsSL "$PERCEPTION_RELEASE_URL" -o "$LUCID_DIR/perception/$PERCEPTION_BINARY" 2>/dev/null; then
-        # Validate the downloaded file is non-empty
+        # Validate the downloaded file is non-empty and correct format
         if [ -s "$LUCID_DIR/perception/$PERCEPTION_BINARY" ]; then
-            chmod +x "$LUCID_DIR/perception/$PERCEPTION_BINARY"
-            success "Downloaded perception binary"
-            PERCEPTION_READY=true
+            FILE_TYPE=$(file -b "$LUCID_DIR/perception/$PERCEPTION_BINARY" 2>/dev/null || echo "unknown")
+            case "$(uname -s)" in
+                Darwin) EXPECTED="Mach-O" ;;
+                Linux)  EXPECTED="ELF" ;;
+                *)      EXPECTED="" ;;
+            esac
+            if [ -n "$EXPECTED" ] && ! echo "$FILE_TYPE" | grep -q "$EXPECTED"; then
+                rm -f "$LUCID_DIR/perception/$PERCEPTION_BINARY"
+                echo "  Downloaded perception binary has wrong format ($FILE_TYPE), skipping"
+            else
+                chmod +x "$LUCID_DIR/perception/$PERCEPTION_BINARY"
+                success "Downloaded perception binary"
+                PERCEPTION_READY=true
+            fi
         else
             rm -f "$LUCID_DIR/perception/$PERCEPTION_BINARY"
             echo "  Downloaded perception binary was empty, skipping"

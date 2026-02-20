@@ -67,6 +67,11 @@ jobs:
         working-directory: packages/lucid-native
         run: bun install
 
+      - name: Clean stale binaries
+        working-directory: packages/lucid-native
+        shell: bash
+        run: rm -f *.node
+
       - name: Build lucid-native
         working-directory: packages/lucid-native
         shell: bash
@@ -78,22 +83,22 @@ jobs:
             --manifest-path ../../crates/lucid-napi/Cargo.toml \
             --output-dir .
 
-      - name: Rename lucid-native output
+      - name: Verify binary
         working-directory: packages/lucid-native
         shell: bash
         run: |
-          for f in *.node; do
-            if [ -f "$f" ]; then
-              mv "$f" "lucid-native.${{ matrix.name }}.node"
-              break
-            fi
-          done
+          ls -la *.node
+          test -f "lucid-native.${{ matrix.name }}.node" || {
+            echo "::error::Expected lucid-native.${{ matrix.name }}.node but found:"
+            ls *.node
+            exit 1
+          }
 
       - name: Upload lucid-native artifact
         uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.name }}
-          path: packages/lucid-native/*.node
+          path: packages/lucid-native/lucid-native.${{ matrix.name }}.node
           if-no-files-found: error
 
   build-perception:
@@ -144,6 +149,11 @@ jobs:
         working-directory: packages/lucid-perception
         run: bun install
 
+      - name: Clean stale binaries
+        working-directory: packages/lucid-perception
+        shell: bash
+        run: rm -f *.node
+
       - name: Build lucid-perception
         working-directory: packages/lucid-perception
         shell: bash
@@ -153,22 +163,22 @@ jobs:
             --manifest-path ../../crates/lucid-perception-napi/Cargo.toml \
             --output-dir .
 
-      - name: Rename lucid-perception output
+      - name: Verify binary
         working-directory: packages/lucid-perception
         shell: bash
         run: |
-          for f in *.node; do
-            if [ -f "$f" ]; then
-              mv "$f" "lucid-perception.${{ matrix.name }}.node"
-              break
-            fi
-          done
+          ls -la *.node
+          test -f "lucid-perception.${{ matrix.name }}.node" || {
+            echo "::error::Expected lucid-perception.${{ matrix.name }}.node but found:"
+            ls *.node
+            exit 1
+          }
 
       - name: Upload lucid-perception artifact
         uses: actions/upload-artifact@v4
         with:
           name: perception-${{ matrix.name }}
-          path: packages/lucid-perception/*.node
+          path: packages/lucid-perception/lucid-perception.${{ matrix.name }}.node
           if-no-files-found: error
 
   # Combine all binaries and update the repo
@@ -193,20 +203,36 @@ jobs:
         run: |
           mkdir -p packages/lucid-native packages/lucid-perception
 
-          # Copy native binaries
+          # Each artifact now contains exactly one .node file
           for dir in artifacts/native-*; do
-            cp "$dir"/*.node packages/lucid-native/ || true
+            cp "$dir"/*.node packages/lucid-native/
           done
 
-          # Copy perception binaries
           for dir in artifacts/perception-*; do
-            cp "$dir"/*.node packages/lucid-perception/ || true
+            cp "$dir"/*.node packages/lucid-perception/
           done
 
           echo "=== lucid-native ==="
-          ls -la packages/lucid-native/*.node || echo "No native binaries"
+          ls -la packages/lucid-native/*.node
           echo "=== lucid-perception ==="
-          ls -la packages/lucid-perception/*.node || echo "No perception binaries"
+          ls -la packages/lucid-perception/*.node
+
+      - name: Validate binary formats
+        run: |
+          fail=0
+          for f in packages/lucid-native/*.node packages/lucid-perception/*.node; do
+            desc=$(file -b "$f")
+            name=$(basename "$f")
+            case "$name" in
+              *darwin-arm64*)  echo "$name: $desc"; [[ "$desc" == *Mach-O*arm64* ]] || { echo "::error::$name is not Mach-O arm64"; fail=1; } ;;
+              *darwin-x64*)    echo "$name: $desc"; [[ "$desc" == *Mach-O*x86_64* ]] || { echo "::error::$name is not Mach-O x86_64"; fail=1; } ;;
+              *linux-x64*)     echo "$name: $desc"; [[ "$desc" == *ELF*x86-64* ]]   || { echo "::error::$name is not ELF x86-64"; fail=1; } ;;
+              *linux-arm64*)   echo "$name: $desc"; [[ "$desc" == *ELF*aarch64* ]]   || { echo "::error::$name is not ELF aarch64"; fail=1; } ;;
+              *win32*)         echo "$name: $desc"; [[ "$desc" == *PE32+* ]]         || { echo "::error::$name is not PE32+"; fail=1; } ;;
+              *)               echo "$name: $desc (unknown platform)" ;;
+            esac
+          done
+          [ "$fail" -eq 0 ] || exit 1
 
       - name: Commit binaries
         run: |
@@ -232,7 +258,7 @@ jobs:
         run: |
           mkdir -p release
 
-          # Copy all binaries
+          # Each artifact contains exactly one .node file
           for dir in artifacts/native-*; do
             cp "$dir"/*.node "release/"
           done
@@ -240,11 +266,22 @@ jobs:
             cp "$dir"/*.node "release/"
           done
 
-          # Create zip archive
-          cd release && zip -r ../lucid-binaries.zip .
-
           echo "=== Release files ==="
-          ls -la
+          ls -la release/*.node
+
+          # Validate formats before releasing
+          for f in release/*.node; do
+            desc=$(file -b "$f")
+            name=$(basename "$f")
+            echo "$name: $desc"
+            case "$name" in
+              *linux*)  [[ "$desc" == *ELF* ]]    || { echo "::error::$name has wrong format: $desc"; exit 1; } ;;
+              *darwin*) [[ "$desc" == *Mach-O* ]]  || { echo "::error::$name has wrong format: $desc"; exit 1; } ;;
+              *win32*)  [[ "$desc" == *PE32+* ]]   || { echo "::error::$name has wrong format: $desc"; exit 1; } ;;
+            esac
+          done
+
+          cd release && zip -r ../lucid-binaries.zip .
 
       - name: Download BGE embedding model files
         run: |

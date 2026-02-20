@@ -1,6 +1,6 @@
 {
 	"name": "@lucid-memory/native",
-	"version": "0.6.4",
+	"version": "0.6.5",
 	"description": "Native bindings for lucid-core memory retrieval engine",
 	"main": "index.js",
 	"types": "index.d.ts",
@@ -8,9 +8,7 @@
 		"binaryName": "lucid-native",
 		"targets": [
 			"aarch64-apple-darwin",
-			"x86_64-apple-darwin",
 			"x86_64-unknown-linux-gnu",
-			"aarch64-unknown-linux-gnu",
 			"x86_64-pc-windows-msvc"
 		]
 	},
