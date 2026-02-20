@@ -10,6 +10,13 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
+/// Default ONNX model filename. Change this to switch variants
+/// (e.g. `bge-base-en-v1.5.onnx` for fp32).
+const DEFAULT_MODEL_FILE: &str = "bge-base-en-v1.5-quantized.onnx";
+
+/// Default tokenizer filename.
+const DEFAULT_TOKENIZER_FILE: &str = "bge-base-en-v1.5-tokenizer.json";
+
 /// Default model directory: `~/.lucid/models`
 fn default_model_dir() -> PathBuf {
 	dirs::home_dir()
@@ -31,8 +38,8 @@ impl Default for EmbeddingModelConfig {
 	fn default() -> Self {
 		let dir = default_model_dir();
 		Self {
-			model_path: Some(dir.join("bge-base-en-v1.5-fp16.onnx")),
-			tokenizer_path: Some(dir.join("bge-base-en-v1.5-tokenizer.json")),
+			model_path: Some(dir.join(DEFAULT_MODEL_FILE)),
+			tokenizer_path: Some(dir.join(DEFAULT_TOKENIZER_FILE)),
 		}
 	}
 }

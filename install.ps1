@@ -205,7 +205,7 @@ if ($NeedYtdlp) { $InstallList += "  ${C4}•${NC} yt-dlp (video downloads)" }
 if ($NeedWhisper) { $InstallList += "  ${C4}•${NC} OpenAI Whisper (audio transcription)" }
 # Always installing these
 $InstallList += "  ${C4}•${NC} Lucid Memory server"
-$InstallList += "  ${C4}•${NC} BGE embedding model (~220MB)"
+$InstallList += "  ${C4}•${NC} BGE embedding model (~105MB)"
 $InstallList += "  ${C4}•${NC} Whisper model (74MB)"
 $InstallList += "  ${C4}•${NC} Claude Code hooks"
 
@@ -765,22 +765,40 @@ Show-Progress  # Step 5: Embedding provider & client selection
 $LucidModels = "$LucidDir\models"
 New-Item -ItemType Directory -Force -Path $LucidModels | Out-Null
 
-# BGE embedding model (FP16 ONNX, ~220MB) — downloaded from HuggingFace CDN
-$BgeModelUrl = "https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_fp16.onnx"
+# ── BGE embedding model configuration ──
+# Change $BgeVariant to switch model ("quantized" | "fp32").
+# "quantized" = ~105 MB, "fp32" = ~416 MB.  Must match DEFAULT_MODEL_FILE in embedding.rs.
+$BgeVariant = "quantized"
+
+if ($BgeVariant -eq "fp32") {
+    $BgeModelFile = "bge-base-en-v1.5.onnx"
+    $BgeModelUrl = "https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model.onnx"
+    $BgeModelSizeDesc = "~416MB"
+    $BgeMinSize = 400000000
+} else {
+    $BgeModelFile = "bge-base-en-v1.5-quantized.onnx"
+    $BgeModelUrl = "https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_quantized.onnx"
+    $BgeModelSizeDesc = "~105MB"
+    $BgeMinSize = 100000000
+}
+$BgeTokenizerFile = "bge-base-en-v1.5-tokenizer.json"
 $BgeTokenizerUrl = "https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/tokenizer.json"
 
-$BgeModel = "$LucidModels\bge-base-en-v1.5-fp16.onnx"
+# Remove old incompatible model variants
+Remove-Item "$LucidModels\bge-base-en-v1.5-fp16.onnx" -Force -ErrorAction SilentlyContinue
+Get-ChildItem "$LucidModels\bge-base-en-v1.5*.onnx" -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne $BgeModelFile } | Remove-Item -Force
+
+$BgeModel = "$LucidModels\$BgeModelFile"
 if (-not (Test-Path $BgeModel)) {
     Write-Host ""
-    Write-Host "Downloading BGE embedding model (~220MB)..."
+    Write-Host "Downloading BGE embedding model ($BgeModelSizeDesc)..."
     try {
         $OldProgress = $ProgressPreference
         $ProgressPreference = 'SilentlyContinue'
         Invoke-WebRequest -UseBasicParsing -Uri $BgeModelUrl -OutFile "$BgeModel.tmp"
         $ProgressPreference = $OldProgress
-        # Validate file is actually a model (>100MB), not a CDN error page
         $FileSize = (Get-Item "$BgeModel.tmp").Length
-        if ($FileSize -gt 100000000) {
+        if ($FileSize -gt $BgeMinSize) {
             Move-Item "$BgeModel.tmp" $BgeModel -Force
             Write-Success "BGE embedding model downloaded"
         } else {
@@ -797,7 +815,7 @@ if (-not (Test-Path $BgeModel)) {
     Write-Success "BGE embedding model already present"
 }
 
-$BgeTokenizer = "$LucidModels\bge-base-en-v1.5-tokenizer.json"
+$BgeTokenizer = "$LucidModels\$BgeTokenizerFile"
 if (-not (Test-Path $BgeTokenizer)) {
     Write-Host "Downloading BGE tokenizer..."
     try {

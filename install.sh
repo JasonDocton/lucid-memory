@@ -359,7 +359,7 @@ fi
 
 # Always installing these
 INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Lucid Memory server"
-INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} BGE embedding model (~220MB)"
+INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} BGE embedding model (~105MB)"
 INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Whisper model (74MB)"
 INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Claude Code hooks"
 
@@ -1118,41 +1118,61 @@ fi
 LUCID_MODELS="$LUCID_DIR/models"
 mkdir -p "$LUCID_MODELS"
 
-# BGE embedding model (FP16 ONNX, ~220MB) — downloaded from HuggingFace CDN
-BGE_MODEL_URL="https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_fp16.onnx"
+# ── BGE embedding model configuration ──
+# Change BGE_VARIANT to switch model (quantized | fp32).
+# "quantized" = ~105 MB, "fp32" = ~416 MB.  Must match DEFAULT_MODEL_FILE in embedding.rs.
+BGE_VARIANT="quantized"
+
+if [ "$BGE_VARIANT" = "fp32" ]; then
+    BGE_MODEL_FILE="bge-base-en-v1.5.onnx"
+    BGE_MODEL_URL="https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model.onnx"
+    BGE_MODEL_SIZE_DESC="~416MB"
+    BGE_MIN_SIZE=400000000
+else
+    BGE_MODEL_FILE="bge-base-en-v1.5-quantized.onnx"
+    BGE_MODEL_URL="https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_quantized.onnx"
+    BGE_MODEL_SIZE_DESC="~105MB"
+    BGE_MIN_SIZE=100000000
+fi
+BGE_TOKENIZER_FILE="bge-base-en-v1.5-tokenizer.json"
 BGE_TOKENIZER_URL="https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/tokenizer.json"
 
-if [ ! -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx" ]; then
+# Remove old incompatible model variants
+rm -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx"
+for f in "$LUCID_MODELS"/bge-base-en-v1.5*.onnx; do
+    [ -f "$f" ] && [ "$(basename "$f")" != "$BGE_MODEL_FILE" ] && rm -f "$f"
+done
+
+if [ ! -f "$LUCID_MODELS/$BGE_MODEL_FILE" ]; then
     echo ""
-    echo "Downloading BGE embedding model (~220MB)..."
-    rm -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp"
-    if curl -fL --progress-bar -o "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp" "$BGE_MODEL_URL"; then
-        # Validate file is actually a model (>100MB), not a CDN error page
-        FILE_SIZE=$(wc -c < "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp" 2>/dev/null | tr -d ' ')
-        if [ "${FILE_SIZE:-0}" -gt 100000000 ]; then
-            mv "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp" "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx"
+    echo "Downloading BGE embedding model ($BGE_MODEL_SIZE_DESC)..."
+    rm -f "$LUCID_MODELS/$BGE_MODEL_FILE.tmp"
+    if curl -fL --progress-bar -o "$LUCID_MODELS/$BGE_MODEL_FILE.tmp" "$BGE_MODEL_URL"; then
+        FILE_SIZE=$(wc -c < "$LUCID_MODELS/$BGE_MODEL_FILE.tmp" 2>/dev/null | tr -d ' ')
+        if [ "${FILE_SIZE:-0}" -gt "$BGE_MIN_SIZE" ]; then
+            mv "$LUCID_MODELS/$BGE_MODEL_FILE.tmp" "$LUCID_MODELS/$BGE_MODEL_FILE"
             success "BGE embedding model downloaded"
         else
-            rm -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp"
+            rm -f "$LUCID_MODELS/$BGE_MODEL_FILE.tmp"
             warn "Downloaded BGE model is too small (${FILE_SIZE} bytes) - may be corrupted"
         fi
     else
-        rm -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp"
+        rm -f "$LUCID_MODELS/$BGE_MODEL_FILE.tmp"
         warn "Could not download BGE model - embeddings will fall back to OpenAI if available"
     fi
 else
     success "BGE embedding model already present"
 fi
 
-if [ ! -f "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json" ]; then
+if [ ! -f "$LUCID_MODELS/$BGE_TOKENIZER_FILE" ]; then
     echo "Downloading BGE tokenizer..."
-    rm -f "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json.tmp"
-    if curl -fL --progress-bar -o "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json.tmp" "$BGE_TOKENIZER_URL" \
-      && [ -s "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json.tmp" ]; then
-        mv "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json.tmp" "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json"
+    rm -f "$LUCID_MODELS/$BGE_TOKENIZER_FILE.tmp"
+    if curl -fL --progress-bar -o "$LUCID_MODELS/$BGE_TOKENIZER_FILE.tmp" "$BGE_TOKENIZER_URL" \
+      && [ -s "$LUCID_MODELS/$BGE_TOKENIZER_FILE.tmp" ]; then
+        mv "$LUCID_MODELS/$BGE_TOKENIZER_FILE.tmp" "$LUCID_MODELS/$BGE_TOKENIZER_FILE"
         success "BGE tokenizer downloaded"
     else
-        rm -f "$LUCID_MODELS/bge-base-en-v1.5-tokenizer.json.tmp"
+        rm -f "$LUCID_MODELS/$BGE_TOKENIZER_FILE.tmp"
         warn "Could not download BGE tokenizer"
     fi
 else
