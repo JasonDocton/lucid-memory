@@ -31,7 +31,7 @@ impl Default for EmbeddingModelConfig {
 	fn default() -> Self {
 		let dir = default_model_dir();
 		Self {
-			model_path: Some(dir.join("bge-base-en-v1.5-fp16.onnx")),
+			model_path: Some(dir.join("bge-base-en-v1.5-quantized.onnx")),
 			tokenizer_path: Some(dir.join("bge-base-en-v1.5-tokenizer.json")),
 		}
 	}

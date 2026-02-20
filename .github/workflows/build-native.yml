@@ -248,9 +248,9 @@ jobs:
 
       - name: Download BGE embedding model files
         run: |
-          # FP16 ONNX model (from Xenova repo which has the FP16 variant)
-          curl -fL -o release/bge-base-en-v1.5-fp16.onnx \
-            "https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_fp16.onnx"
+          # Quantized ONNX model (compatible with ort 2.0.0-rc.11)
+          curl -fL -o release/bge-base-en-v1.5-quantized.onnx \
+            "https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_quantized.onnx"
           # Tokenizer (from BAAI original repo)
           curl -fL -o release/bge-base-en-v1.5-tokenizer.json \
             "https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/tokenizer.json"
@@ -260,10 +260,10 @@ jobs:
 
       - name: Validate model files
         run: |
-          test -f release/bge-base-en-v1.5-fp16.onnx || (echo "BGE model missing!" && exit 1)
+          test -f release/bge-base-en-v1.5-quantized.onnx || (echo "BGE model missing!" && exit 1)
           test -f release/bge-base-en-v1.5-tokenizer.json || (echo "BGE tokenizer missing!" && exit 1)
-          SIZE=$(stat -c%s release/bge-base-en-v1.5-fp16.onnx 2>/dev/null || stat -f%z release/bge-base-en-v1.5-fp16.onnx)
-          test "$SIZE" -gt 100000000 || (echo "BGE model too small: $SIZE bytes" && exit 1)
+          SIZE=$(stat -c%s release/bge-base-en-v1.5-quantized.onnx 2>/dev/null || stat -f%z release/bge-base-en-v1.5-quantized.onnx)
+          test "$SIZE" -gt 30000000 || (echo "BGE model too small: $SIZE bytes" && exit 1)
           echo "BGE model validated: $SIZE bytes"
 
       - name: Upload to release
@@ -272,5 +272,5 @@ jobs:
           files: |
             lucid-binaries.zip
             release/*.node
-            release/bge-base-en-v1.5-fp16.onnx
+            release/bge-base-en-v1.5-quantized.onnx
             release/bge-base-en-v1.5-tokenizer.json

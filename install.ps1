@@ -765,22 +765,31 @@ Show-Progress  # Step 5: Embedding provider & client selection
 $LucidModels = "$LucidDir\models"
 New-Item -ItemType Directory -Force -Path $LucidModels | Out-Null
 
-# BGE embedding model (FP16 ONNX, ~220MB) — downloaded from HuggingFace CDN
-$BgeModelUrl = "https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_fp16.onnx"
+# BGE embedding model (quantized ONNX, ~110MB) — downloaded from HuggingFace CDN
+# Note: model_quantized.onnx is used instead of model_fp16.onnx because the FP16
+# variant contains ORT graph optimizations incompatible with ort 2.0.0-rc.11.
+$BgeModelUrl = "https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_quantized.onnx"
 $BgeTokenizerUrl = "https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/tokenizer.json"
 
-$BgeModel = "$LucidModels\bge-base-en-v1.5-fp16.onnx"
+# Clean up old FP16 model (incompatible with ort 2.x)
+$OldFp16Model = "$LucidModels\bge-base-en-v1.5-fp16.onnx"
+if (Test-Path $OldFp16Model) {
+    Remove-Item $OldFp16Model -Force -ErrorAction SilentlyContinue
+    Write-Host "Removed old FP16 model (incompatible with current runtime)"
+}
+
+$BgeModel = "$LucidModels\bge-base-en-v1.5-quantized.onnx"
 if (-not (Test-Path $BgeModel)) {
     Write-Host ""
-    Write-Host "Downloading BGE embedding model (~220MB)..."
+    Write-Host "Downloading BGE embedding model (~110MB)..."
     try {
         $OldProgress = $ProgressPreference
         $ProgressPreference = 'SilentlyContinue'
         Invoke-WebRequest -UseBasicParsing -Uri $BgeModelUrl -OutFile "$BgeModel.tmp"
         $ProgressPreference = $OldProgress
-        # Validate file is actually a model (>100MB), not a CDN error page
+        # Validate file is actually a model (>30MB), not a CDN error page
         $FileSize = (Get-Item "$BgeModel.tmp").Length
-        if ($FileSize -gt 100000000) {
+        if ($FileSize -gt 30000000) {
             Move-Item "$BgeModel.tmp" $BgeModel -Force
             Write-Success "BGE embedding model downloaded"
         } else {

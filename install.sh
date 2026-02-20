@@ -1118,26 +1118,34 @@ fi
 LUCID_MODELS="$LUCID_DIR/models"
 mkdir -p "$LUCID_MODELS"
 
-# BGE embedding model (FP16 ONNX, ~220MB) — downloaded from HuggingFace CDN
-BGE_MODEL_URL="https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_fp16.onnx"
+# BGE embedding model (quantized ONNX, ~110MB) — downloaded from HuggingFace CDN
+# Note: model_quantized.onnx is used instead of model_fp16.onnx because the FP16
+# variant contains ORT graph optimizations incompatible with ort 2.0.0-rc.11.
+BGE_MODEL_URL="https://huggingface.co/Xenova/bge-base-en-v1.5/resolve/main/onnx/model_quantized.onnx"
 BGE_TOKENIZER_URL="https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/tokenizer.json"
 
-if [ ! -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx" ]; then
+# Clean up old FP16 model (incompatible with ort 2.x)
+if [ -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx" ]; then
+    rm -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx"
+    echo "Removed old FP16 model (incompatible with current runtime)"
+fi
+
+if [ ! -f "$LUCID_MODELS/bge-base-en-v1.5-quantized.onnx" ]; then
     echo ""
-    echo "Downloading BGE embedding model (~220MB)..."
-    rm -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp"
-    if curl -fL --progress-bar -o "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp" "$BGE_MODEL_URL"; then
-        # Validate file is actually a model (>100MB), not a CDN error page
-        FILE_SIZE=$(wc -c < "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp" 2>/dev/null | tr -d ' ')
-        if [ "${FILE_SIZE:-0}" -gt 100000000 ]; then
-            mv "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp" "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx"
+    echo "Downloading BGE embedding model (~110MB)..."
+    rm -f "$LUCID_MODELS/bge-base-en-v1.5-quantized.onnx.tmp"
+    if curl -fL --progress-bar -o "$LUCID_MODELS/bge-base-en-v1.5-quantized.onnx.tmp" "$BGE_MODEL_URL"; then
+        # Validate file is actually a model (>30MB), not a CDN error page
+        FILE_SIZE=$(wc -c < "$LUCID_MODELS/bge-base-en-v1.5-quantized.onnx.tmp" 2>/dev/null | tr -d ' ')
+        if [ "${FILE_SIZE:-0}" -gt 30000000 ]; then
+            mv "$LUCID_MODELS/bge-base-en-v1.5-quantized.onnx.tmp" "$LUCID_MODELS/bge-base-en-v1.5-quantized.onnx"
             success "BGE embedding model downloaded"
         else
-            rm -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp"
+            rm -f "$LUCID_MODELS/bge-base-en-v1.5-quantized.onnx.tmp"
             warn "Downloaded BGE model is too small (${FILE_SIZE} bytes) - may be corrupted"
         fi
     else
-        rm -f "$LUCID_MODELS/bge-base-en-v1.5-fp16.onnx.tmp"
+        rm -f "$LUCID_MODELS/bge-base-en-v1.5-quantized.onnx.tmp"
         warn "Could not download BGE model - embeddings will fall back to OpenAI if available"
     fi
 else

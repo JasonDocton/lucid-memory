@@ -124,7 +124,7 @@ echo -e "${BOLD}URL consistency${NC}"
 # Extract BGE model URL from install.sh
 SH_BGE_URL=$(grep 'BGE_MODEL_URL=' "$ROOT/install.sh" | head -1 | sed 's/.*="\(.*\)"/\1/')
 # Extract BGE model URL from CI workflow
-CI_BGE_URL=$(grep 'model_fp16.onnx' "$ROOT/.github/workflows/build-native.yml" | grep -o 'https://[^"]*' | head -1)
+CI_BGE_URL=$(grep 'model_quantized.onnx' "$ROOT/.github/workflows/build-native.yml" | grep -o 'https://[^"]*' | head -1)
 
 if [ -n "$SH_BGE_URL" ] && [ "$SH_BGE_URL" = "$CI_BGE_URL" ]; then
     pass "BGE model URL matches between install.sh and build-native.yml"
@@ -180,7 +180,7 @@ else
         fi
     }
 
-    check_url "$SH_BGE_URL" "BGE model (FP16 ONNX)"
+    check_url "$SH_BGE_URL" "BGE model (quantized ONNX)"
     check_url "$SH_TOKENIZER_URL" "BGE tokenizer"
     check_url "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin" "Whisper model"
 fi
@@ -194,7 +194,7 @@ echo -e "${BOLD}CI workflow checks${NC}"
 CI_FILE="$ROOT/.github/workflows/build-native.yml"
 
 # No || true on model downloads (should fail loudly)
-if grep -A1 'model_fp16.onnx\|tokenizer.json' "$CI_FILE" | grep -q '|| true'; then
+if grep -A1 'model_quantized.onnx\|tokenizer.json' "$CI_FILE" | grep -q '|| true'; then
     fail "build-native.yml — model download has '|| true' (should fail on error)"
 else
     pass "build-native.yml — model downloads fail loudly on error"
