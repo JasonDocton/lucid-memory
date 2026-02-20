@@ -676,24 +676,20 @@ is_musl() {
 detect_native_binary() {
     local arch=$(uname -m)
     local os=$(uname -s)
-    local libc="gnu"
-    if [ "$os" = "Linux" ] && is_musl; then
-        libc="musl"
-    fi
 
+    # Only platforms with CI-built binaries:
+    #   darwin-arm64, linux-x64-gnu, win32-x64-msvc
+    # darwin-x64 omitted (ort-sys has no prebuilt ONNX Runtime)
+    # linux-arm64 omitted (whisper-rs cross-compile issues)
     case "$os" in
         Darwin)
             if [ "$arch" = "arm64" ]; then
                 echo "lucid-native.darwin-arm64.node"
-            else
-                echo "lucid-native.darwin-x64.node"
             fi
             ;;
         Linux)
-            if [ "$arch" = "aarch64" ]; then
-                echo "lucid-native.linux-arm64-${libc}.node"
-            else
-                echo "lucid-native.linux-x64-${libc}.node"
+            if [ "$arch" = "x86_64" ]; then
+                echo "lucid-native.linux-x64-gnu.node"
             fi
             ;;
         *)
@@ -796,11 +792,10 @@ fi
 detect_perception_binary() {
     local arch=$(uname -m)
     local os=$(uname -s)
-    local libc="gnu"
-    if [ "$os" = "Linux" ] && is_musl; then
-        libc="musl"
-    fi
 
+    # Only platforms with CI-built binaries:
+    #   darwin-arm64, darwin-x64, linux-x64-gnu, win32-x64-msvc
+    # linux-arm64 omitted (whisper-rs cross-compile issues)
     case "$os" in
         Darwin)
             if [ "$arch" = "arm64" ]; then
@@ -810,10 +805,8 @@ detect_perception_binary() {
             fi
             ;;
         Linux)
-            if [ "$arch" = "aarch64" ]; then
-                echo "lucid-perception.linux-arm64-${libc}.node"
-            else
-                echo "lucid-perception.linux-x64-${libc}.node"
+            if [ "$arch" = "x86_64" ]; then
+                echo "lucid-perception.linux-x64-gnu.node"
             fi
             ;;
         *)
