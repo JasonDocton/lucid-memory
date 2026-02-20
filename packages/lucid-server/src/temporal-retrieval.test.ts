@@ -891,17 +891,18 @@ describe("Temporal Retrieval Improvements", () => {
 			r.updateWorkingMemory(recentMemory.id, now)
 
 			// Retrieve with project context (triggers Phase 3)
-			const results = await retrieval.retrieve(
+			const result = await retrieval.retrieve(
 				"integration test feature",
 				{ maxResults: 10 },
 				project.id
 			)
 
 			// Verify retrieval works
-			expect(results).toBeDefined()
-			expect(Array.isArray(results)).toBe(true)
+			expect(result).toBeDefined()
+			expect(Array.isArray(result.candidates)).toBe(true)
 
 			// If we have results, verify we get both memories back
+			const results = result.candidates
 			if (results.length >= 2) {
 				const recentResult = results.find(
 					(r) => r.memory.id === recentMemory.id
@@ -949,13 +950,14 @@ describe("Temporal Retrieval Improvements", () => {
 			})
 
 			// Retrieve (should not throw)
-			const results = await retrieval.retrieve(
+			const result = await retrieval.retrieve(
 				"test integration",
 				{ maxResults: 5 },
 				project.id
 			)
 
-			expect(results).toBeDefined()
+			expect(result).toBeDefined()
+			expect(result.candidates).toBeDefined()
 		})
 
 		it("should maintain phase ordering independence", async () => {
@@ -974,15 +976,15 @@ describe("Temporal Retrieval Improvements", () => {
 			// Don't activate in WM (skip Phase 1)
 			// Don't use session tracking (skip Phase 4)
 
-			const results = await retrieval.retrieve(
+			const result = await retrieval.retrieve(
 				"phase independence",
 				{ maxResults: 5 },
 				project.id
 			)
 
 			// Should still work
-			expect(results).toBeDefined()
-			expect(Array.isArray(results)).toBe(true)
+			expect(result).toBeDefined()
+			expect(Array.isArray(result.candidates)).toBe(true)
 		})
 	})
 })

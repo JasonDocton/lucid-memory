@@ -100,6 +100,23 @@ export interface EmbeddingResult {
 	dimensions: number
 }
 
+export interface ProviderDiagnostics {
+	nativeStatus:
+		| "loaded"
+		| "load_failed"
+		| "files_missing"
+		| "module_unavailable"
+	nativeError?: string
+	ollamaStatus?: "connected" | "no_model" | "timeout" | "refused" | "error"
+	ollamaError?: string
+	openaiAvailable: boolean
+}
+
+export interface DetectProviderResult {
+	config: EmbeddingConfig | null
+	diagnostics: ProviderDiagnostics
+}
+
 const defaultOllamaHost = "http://localhost:11434"
 const defaultOllamaModel = "nomic-embed-text"
 const defaultOpenaiModel = "text-embedding-3-small"
@@ -136,24 +153,27 @@ try {
 }
 
 /**
- * Try to load the native embedding model. Returns true if loaded.
+ * Try to load the native embedding model.
+ * Returns { success, error? } so callers can report specific failures.
  */
 export function loadNativeEmbeddingModel(
 	modelPath?: string,
 	tokenizerPath?: string
-): boolean {
-	if (!nativeEmbedding) return false
+): { success: boolean; error?: string } {
+	if (!nativeEmbedding)
+		return { success: false, error: "Native module not available" }
 	try {
-		return nativeEmbedding.loadEmbeddingModel(
+		const loaded = nativeEmbedding.loadEmbeddingModel(
 			modelPath ?? null,
 			tokenizerPath ?? null
 		)
+		return loaded
+			? { success: true }
+			: { success: false, error: "loadEmbeddingModel returned false" }
 	} catch (error) {
-		logError(
-			"Failed to load native embedding model",
-			error instanceof Error ? error : new Error(String(error))
-		)
-		return false
+		const err = error instanceof Error ? error : new Error(String(error))
+		logError("Failed to load native embedding model", err)
+		return { success: false, error: err.message }
 	}
 }
 
@@ -383,26 +403,50 @@ export class EmbeddingClient {
  * Auto-detect the best available embedding provider.
  *
  * Priority: native → OpenAI (env var) → Ollama (legacy) → null
+ *
+ * Returns both the config and diagnostics so callers can report
+ * exactly why each provider was skipped.
  */
-export async function detectProvider(): Promise<EmbeddingConfig | null> {
-	// 1. Try native in-process embeddings (zero deps, best UX)
-	if (nativeEmbedding?.isEmbeddingModelLoaded?.()) {
-		return { provider: "native", model: "bge-base-en-v1.5" }
+export async function detectProvider(): Promise<DetectProviderResult> {
+	const diagnostics: ProviderDiagnostics = {
+		nativeStatus: "module_unavailable",
+		openaiAvailable: false,
 	}
 
-	// Check if native model files exist (even if not yet loaded)
-	if (isNativeEmbeddingAvailable()) {
-		// Model files exist — try loading
-		if (loadNativeEmbeddingModel()) {
-			return { provider: "native", model: "bge-base-en-v1.5" }
+	// 1. Try native in-process embeddings (zero deps, best UX)
+	if (!nativeEmbedding) {
+		diagnostics.nativeStatus = "module_unavailable"
+	} else if (nativeEmbedding.isEmbeddingModelLoaded?.()) {
+		diagnostics.nativeStatus = "loaded"
+		return {
+			config: { provider: "native", model: "bge-base-en-v1.5" },
+			diagnostics,
 		}
+	} else if (isNativeEmbeddingAvailable()) {
+		// Model files exist — try loading
+		const loadResult = loadNativeEmbeddingModel()
+		if (loadResult.success) {
+			diagnostics.nativeStatus = "loaded"
+			return {
+				config: { provider: "native", model: "bge-base-en-v1.5" },
+				diagnostics,
+			}
+		}
+		diagnostics.nativeStatus = "load_failed"
+		diagnostics.nativeError = loadResult.error
+	} else {
+		diagnostics.nativeStatus = "files_missing"
 	}
 
 	// 2. Check for OpenAI API key in environment
 	// biome-ignore lint/style/noProcessEnv: Config detection requires environment access
 	const openaiKey = process.env.OPENAI_API_KEY
+	diagnostics.openaiAvailable = !!openaiKey
 	if (openaiKey) {
-		return { provider: "openai", openaiApiKey: openaiKey }
+		return {
+			config: { provider: "openai", openaiApiKey: openaiKey },
+			diagnostics,
+		}
 	}
 
 	// 3. Try Ollama (legacy fallback for users who have it installed)
@@ -418,19 +462,34 @@ export async function detectProvider(): Promise<EmbeddingConfig | null> {
 			)
 
 			if (hasModel) {
-				return { provider: "ollama", model: defaultOllamaModel }
+				diagnostics.ollamaStatus = "connected"
+				return {
+					config: { provider: "ollama", model: defaultOllamaModel },
+					diagnostics,
+				}
 			}
+			diagnostics.ollamaStatus = "no_model"
+			diagnostics.ollamaError = "nomic-embed-text model not found"
+		} else {
+			diagnostics.ollamaStatus = "error"
+			diagnostics.ollamaError = `HTTP ${response.status}`
 		}
 	} catch (error: unknown) {
-		if (
-			error instanceof Error &&
-			(error.cause as { code?: string })?.code === "ECONNREFUSED"
-		) {
+		const err = error instanceof Error ? error : new Error(String(error))
+		if ((err.cause as { code?: string })?.code === "ECONNREFUSED") {
+			diagnostics.ollamaStatus = "refused"
+			diagnostics.ollamaError = "connection refused (not running)"
 			logWarn("Ollama not running during provider detection")
+		} else if (err.name === "TimeoutError") {
+			diagnostics.ollamaStatus = "timeout"
+			diagnostics.ollamaError = "connection timed out"
+		} else {
+			diagnostics.ollamaStatus = "error"
+			diagnostics.ollamaError = err.message
 		}
 	}
 
-	return null
+	return { config: null, diagnostics }
 }
 
 /**

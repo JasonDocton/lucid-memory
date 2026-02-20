@@ -23,9 +23,11 @@ export {
 	WorkingMemoryConfig,
 } from "./config.ts"
 export type {
+	DetectProviderResult,
 	EmbeddingConfig,
 	EmbeddingProvider,
 	EmbeddingResult,
+	ProviderDiagnostics,
 } from "./embeddings.ts"
 // Embeddings
 export {
@@ -34,7 +36,11 @@ export {
 	EmbeddingClient,
 	normalize,
 } from "./embeddings.ts"
-export type { RetrievalCandidate, RetrievalConfig } from "./retrieval.ts"
+export type {
+	RetrievalCandidate,
+	RetrievalConfig,
+	RetrievalResult,
+} from "./retrieval.ts"
 // Retrieval
 export { DEFAULT_CONFIG, LucidRetrieval } from "./retrieval.ts"
 export type {

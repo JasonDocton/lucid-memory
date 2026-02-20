@@ -1,6 +1,6 @@
 {
 	"name": "@lucid-memory/native",
-	"version": "0.6.3",
+	"version": "0.6.4",
 	"description": "Native bindings for lucid-core memory retrieval engine",
 	"main": "index.js",
 	"types": "index.d.ts",

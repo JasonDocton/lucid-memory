@@ -15,8 +15,8 @@
 
 import {
 	detectProvider,
-	isNativeEmbeddingAvailable,
 	loadNativeEmbeddingModel,
+	type ProviderDiagnostics,
 } from "./embeddings.ts"
 import { LucidRetrieval } from "./retrieval.ts"
 import type { MemoryType } from "./storage.ts"
@@ -108,7 +108,8 @@ async function main() {
 	loadNativeEmbeddingModel()
 
 	// Try to set up embeddings
-	const embeddingConfig = await detectProvider()
+	const { config: embeddingConfig, diagnostics: embeddingDiagnostics } =
+		await detectProvider()
 	if (embeddingConfig) {
 		retrieval.setEmbeddingConfig(embeddingConfig)
 	}
@@ -408,42 +409,22 @@ Examples:
 			console.log(`  Mode: ${config.databaseMode || "shared"}`)
 			console.log("")
 
-			// Check embedding health based on provider
+			// Derive embedding status from diagnostics (already computed during detectProvider)
 			if (embeddingConfig?.provider === "native") {
-				const modelAvailable = isNativeEmbeddingAvailable()
-				if (modelAvailable) {
+				if (embeddingDiagnostics.nativeStatus === "loaded") {
 					embeddingStatus = "ready (in-process ONNX)"
 					isEmbeddingHealthy = true
+				} else if (embeddingDiagnostics.nativeStatus === "load_failed") {
+					embeddingStatus = `model failed to load (${embeddingDiagnostics.nativeError ?? "unknown error"})`
 				} else {
 					embeddingStatus = "model files missing (~/.lucid/models/)"
 				}
 			} else if (embeddingConfig?.provider === "ollama") {
-				const ollamaHost =
-					embeddingConfig.ollamaHost || "http://localhost:11434"
-				try {
-					const response = await fetch(`${ollamaHost}/api/tags`, {
-						signal: AbortSignal.timeout(3000),
-					})
-					if (response.ok) {
-						embeddingStatus = "running (Ollama)"
-						isEmbeddingHealthy = true
-					} else {
-						embeddingStatus = `error (HTTP ${response.status})`
-					}
-				} catch (e: unknown) {
-					if (e instanceof Error) {
-						if (e.name === "TimeoutError") {
-							embeddingStatus = "timeout (not responding)"
-						} else if (
-							(e.cause as { code?: string })?.code === "ECONNREFUSED"
-						) {
-							embeddingStatus = "not running"
-						} else {
-							embeddingStatus = `error: ${e.message}`
-						}
-					} else {
-						embeddingStatus = `error: ${String(e)}`
-					}
+				if (embeddingDiagnostics.ollamaStatus === "connected") {
+					embeddingStatus = "running (Ollama)"
+					isEmbeddingHealthy = true
+				} else {
+					embeddingStatus = embeddingDiagnostics.ollamaError ?? "not available"
 				}
 			} else if (embeddingConfig?.provider === "openai") {
 				embeddingStatus = embeddingConfig.openaiApiKey
@@ -485,6 +466,30 @@ Examples:
 				}
 			} else {
 				console.log("  ✗ No embedding provider configured")
+				console.log("")
+				console.log("  Tried:")
+				// Native
+				if (embeddingDiagnostics.nativeStatus === "load_failed") {
+					console.log(
+						`    Native: model failed to load (${embeddingDiagnostics.nativeError ?? "unknown"})`
+					)
+				} else if (embeddingDiagnostics.nativeStatus === "files_missing") {
+					console.log("    Native: model files missing (~/.lucid/models/)")
+				} else if (embeddingDiagnostics.nativeStatus === "module_unavailable") {
+					console.log("    Native: module not available")
+				}
+				// OpenAI
+				console.log(
+					embeddingDiagnostics.openaiAvailable
+						? "    OpenAI: API key found"
+						: "    OpenAI: no OPENAI_API_KEY set"
+				)
+				// Ollama
+				if (embeddingDiagnostics.ollamaStatus) {
+					console.log(
+						`    Ollama: ${embeddingDiagnostics.ollamaError ?? embeddingDiagnostics.ollamaStatus}`
+					)
+				}
 			}
 			console.log("")
 
@@ -574,19 +579,43 @@ Examples:
 				console.log("")
 				console.log("Troubleshooting:")
 				if (!hasEmbeddings) {
-					console.log("  - No embedding provider found. Re-run the installer.")
+					if (embeddingDiagnostics.nativeStatus === "load_failed") {
+						console.log(
+							`  - Native model failed to load: ${embeddingDiagnostics.nativeError}`
+						)
+						console.log(
+							"    Try: re-run the installer or check ~/.lucid/logs/embeddings.log"
+						)
+					} else if (embeddingDiagnostics.nativeStatus === "files_missing") {
+						console.log(
+							"  - Native model files missing. Re-run the installer to download BGE model."
+						)
+					} else if (
+						embeddingDiagnostics.nativeStatus === "module_unavailable"
+					) {
+						console.log(
+							"  - Native embedding module not available. Re-run the installer."
+						)
+					} else {
+						console.log(
+							"  - No embedding provider found. Re-run the installer."
+						)
+					}
 				} else if (
 					embeddingConfig?.provider === "native" &&
 					!isEmbeddingHealthy
 				) {
 					console.log(
-						"  - Native model files missing. Re-run the installer to download BGE model."
+						`  - Native model issue: ${embeddingDiagnostics.nativeError ?? "unknown error"}`
 					)
+					console.log("    Check ~/.lucid/logs/embeddings.log for details")
 				} else if (
 					embeddingConfig?.provider === "ollama" &&
 					!isEmbeddingHealthy
 				) {
-					console.log("  - Ollama is not running. Start it with: ollama serve")
+					console.log(
+						`  - Ollama: ${embeddingDiagnostics.ollamaError ?? "not available"}`
+					)
 				}
 				if (!hasFfmpeg) {
 					console.log(

@@ -86,6 +86,12 @@ export interface RetrievalCandidate {
 	probability: number
 }
 
+export interface RetrievalResult {
+	candidates: RetrievalCandidate[]
+	method: "semantic" | "recency"
+	warning?: string
+}
+
 export interface VisualRetrievalCandidate {
 	visual: VisualMemory
 	score: number
@@ -608,12 +614,15 @@ export class LucidRetrieval {
 	/**
 	 * Retrieve memories relevant to a query.
 	 * Uses native Rust bindings when available for high-performance cognitive retrieval.
+	 *
+	 * Returns RetrievalResult with candidates, method used, and optional warning
+	 * so callers can surface degraded retrieval to users.
 	 */
 	async retrieve(
 		query: string,
 		options: Partial<RetrievalConfig> & { filterType?: Memory["type"] } = {},
 		projectId?: string
-	): Promise<RetrievalCandidate[]> {
+	): Promise<RetrievalResult> {
 		const config = { ...DEFAULT_CONFIG, ...options }
 		const limit = config.maxResults ?? config.limit ?? 10
 
@@ -679,7 +688,12 @@ export class LucidRetrieval {
 			)
 
 			candidates.sort((a, b) => b.score - a.score)
-			return candidates.slice(0, limit)
+			return {
+				candidates: candidates.slice(0, limit),
+				method: "recency",
+				warning:
+					"No embedding provider configured — results ranked by recency only, not relevance",
+			}
 		}
 
 		// Get probe embedding - fall back to recency if embedding fails
@@ -687,6 +701,7 @@ export class LucidRetrieval {
 		try {
 			probeResult = await this.embedder.embed(query)
 		} catch (error) {
+			const errMsg = error instanceof Error ? error.message : String(error)
 			console.error(
 				"[lucid] Embedding failed, falling back to recency-based retrieval:",
 				error
@@ -726,7 +741,11 @@ export class LucidRetrieval {
 				}
 			)
 			candidates.sort((a, b) => b.score - a.score)
-			return candidates.slice(0, limit)
+			return {
+				candidates: candidates.slice(0, limit),
+				method: "recency",
+				warning: `Embedding failed — results ranked by recency only, not relevance (${errMsg})`,
+			}
 		}
 		const probeVector = probeResult.vector
 
@@ -825,11 +844,11 @@ export class LucidRetrieval {
 			console.error(
 				"[lucid] Array alignment mismatch in retrieval - this is a bug"
 			)
-			return []
+			return { candidates: [], method: "semantic" }
 		}
 
 		if (memoriesWithEmbeddings.length === 0) {
-			return []
+			return { candidates: [], method: "semantic" }
 		}
 
 		// Get candidates from native or TypeScript implementation
@@ -955,7 +974,7 @@ export class LucidRetrieval {
 			}
 		}
 
-		return finalCandidates
+		return { candidates: finalCandidates, method: "semantic" }
 	}
 
 	/**
@@ -1538,7 +1557,7 @@ export class LucidRetrieval {
 		// Find anchor candidates — try multiple and pick the one with the most
 		// neighbors in the requested direction. Without embeddings, the top
 		// retrieval result may be the last event (no "after" neighbors).
-		const anchors = await this.retrieve(
+		const { candidates: anchors } = await this.retrieve(
 			anchorQuery,
 			{ maxResults: 10 },
 			options?.projectId
@@ -1656,7 +1675,7 @@ export class LucidRetrieval {
 		const minSimilarity = options.minSimilarity ?? 0.3
 
 		// Retrieve more than we need, then filter and budget
-		const candidates = await this.retrieve(
+		const { candidates } = await this.retrieve(
 			currentTask,
 			{ maxResults: 10 },
 			projectId
@@ -2040,7 +2059,7 @@ export class LucidRetrieval {
 		const textBudget = tokenBudget - visualBudget
 
 		// Retrieve text memories
-		const textCandidates = await this.retrieve(
+		const { candidates: textCandidates } = await this.retrieve(
 			currentTask,
 			{ maxResults: 10 },
 			projectId

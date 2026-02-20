@@ -20,7 +20,11 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
 import { ConsolidationConfig, ReconsolidationConfig } from "./config.ts"
 import { ConsolidationEngine } from "./consolidation.ts"
-import { detectProvider, loadNativeEmbeddingModel } from "./embeddings.ts"
+import {
+	detectProvider,
+	loadNativeEmbeddingModel,
+	type ProviderDiagnostics,
+} from "./embeddings.ts"
 import { LucidRetrieval } from "./retrieval.ts"
 
 // === Multi-Client Configuration ===
@@ -111,6 +115,37 @@ function toolError(toolName: string, error: unknown) {
 let retrieval: LucidRetrieval
 let hasSemanticSearch = false
 
+function formatDiagnostics(d: ProviderDiagnostics): string {
+	const lines: string[] = []
+	// Native
+	if (d.nativeStatus === "loaded") {
+		lines.push("  Native: loaded (in-process ONNX)")
+	} else if (d.nativeStatus === "load_failed") {
+		lines.push(
+			`  Native: model failed to load (${d.nativeError ?? "unknown error"})`
+		)
+	} else if (d.nativeStatus === "files_missing") {
+		lines.push("  Native: model files missing (~/.lucid/models/)")
+	} else {
+		lines.push("  Native: module not available")
+	}
+	// OpenAI
+	lines.push(
+		d.openaiAvailable
+			? "  OpenAI: API key found"
+			: "  OpenAI: no OPENAI_API_KEY set"
+	)
+	// Ollama
+	if (d.ollamaStatus) {
+		if (d.ollamaStatus === "connected") {
+			lines.push("  Ollama: connected")
+		} else {
+			lines.push(`  Ollama: ${d.ollamaError ?? d.ollamaStatus}`)
+		}
+	}
+	return lines.join("\n")
+}
+
 /**
  * Initialize embedding provider BEFORE accepting any requests.
  * This fixes the race condition where queries could run before embeddings are ready.
@@ -120,7 +155,7 @@ async function initializeEmbeddings(): Promise<void> {
 		// Pre-load native embedding model before detection
 		loadNativeEmbeddingModel()
 
-		const config = await detectProvider()
+		const { config, diagnostics } = await detectProvider()
 		if (config) {
 			retrieval.setEmbeddingConfig(config)
 			hasSemanticSearch = true
@@ -134,6 +169,8 @@ async function initializeEmbeddings(): Promise<void> {
 			console.error(
 				"[lucid] ⚠️  No embedding provider found - using recency-only retrieval"
 			)
+			console.error("[lucid]    Tried:")
+			console.error(formatDiagnostics(diagnostics))
 			console.error("[lucid]    Run 'lucid status' to troubleshoot")
 		}
 	} catch (error) {
@@ -391,7 +428,7 @@ server.tool(
 				projectId = project.id
 			}
 
-			const results = await retrieval.retrieve(
+			const result = await retrieval.retrieve(
 				query,
 				{
 					maxResults: limit,
@@ -400,7 +437,7 @@ server.tool(
 				projectId
 			)
 
-			if (results.length === 0) {
+			if (result.candidates.length === 0) {
 				return {
 					content: [
 						{
@@ -408,6 +445,8 @@ server.tool(
 							text: JSON.stringify(
 								{
 									message: "No memories found matching your query.",
+									method: result.method,
+									...(result.warning && { warning: result.warning }),
 									suggestions: [
 										"Try broader search terms",
 										"Check if memories exist for this project",
@@ -428,8 +467,10 @@ server.tool(
 						type: "text" as const,
 						text: JSON.stringify(
 							{
-								count: results.length,
-								memories: results.map((r) => ({
+								count: result.candidates.length,
+								method: result.method,
+								...(result.warning && { warning: result.warning }),
+								memories: result.candidates.map((r) => ({
 									id: r.memory.id,
 									content: r.memory.content,
 									type: r.memory.type,
