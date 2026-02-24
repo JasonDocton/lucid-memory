@@ -34,6 +34,27 @@ if [ -t 0 ]; then
     INTERACTIVE=true
 fi
 
+# Local mode: build from source instead of downloading from GitHub
+LOCAL_MODE=false
+REPO_ROOT=""
+for arg in "$@"; do
+    case "$arg" in
+        --local) LOCAL_MODE=true ;;
+    esac
+done
+if [ "$LOCAL_MODE" = true ]; then
+    REPO_ROOT="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || {
+        echo "Error: Could not resolve script directory."
+        exit 1
+    }
+    if [ ! -f "$REPO_ROOT/Cargo.toml" ]; then
+        echo "Error: Not in lucid-memory repo. Run from the repo root."
+        exit 1
+    fi
+    # Local mode is always non-interactive by default (developer knows what they want)
+    INTERACTIVE=false
+fi
+
 # Colors - Gradient palette (purple → blue → cyan)
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -253,6 +274,86 @@ restart_claude_code() {
     fi
 }
 
+# === Local Mode: Platform Detection & Build Helper ===
+
+if [ "$LOCAL_MODE" = true ]; then
+    # Detect platform for napi-rs builds
+    case "$(uname -s)-$(uname -m)" in
+        Darwin-arm64)  NAPI_TARGET="aarch64-apple-darwin";       NAPI_PLAT="darwin-arm64" ;;
+        Darwin-x86_64) NAPI_TARGET="x86_64-apple-darwin";        NAPI_PLAT="darwin-x64" ;;
+        Linux-x86_64)  NAPI_TARGET="x86_64-unknown-linux-gnu";   NAPI_PLAT="linux-x64-gnu" ;;
+        Linux-aarch64) NAPI_TARGET="aarch64-unknown-linux-gnu";   NAPI_PLAT="linux-arm64-gnu" ;;
+        *)             fail "Unsupported platform: $(uname -s)-$(uname -m)" ;;
+    esac
+
+    # Build a napi-rs package from local source and install to ~/.lucid
+    # Usage: build_native_from_source <pkg_name> [required]
+    build_native_from_source() {
+        local pkg_name="$1"
+        local required="${2:-false}"
+        local pkg_dir="$REPO_ROOT/packages/$pkg_name"
+        local binary_name="$pkg_name.$NAPI_PLAT.node"
+        local install_dir manifest
+
+        if [ "$pkg_name" = "lucid-native" ]; then
+            manifest="$REPO_ROOT/crates/lucid-napi/Cargo.toml"
+            install_dir="$LUCID_DIR/native"
+        elif [ "$pkg_name" = "lucid-perception" ]; then
+            manifest="$REPO_ROOT/crates/lucid-perception-napi/Cargo.toml"
+            install_dir="$LUCID_DIR/perception"
+        else
+            fail "Unknown package: $pkg_name"
+        fi
+
+        [ -f "$manifest" ] || { warn "Cargo manifest not found: $manifest"; return 1; }
+
+        echo ""
+        echo "Building $pkg_name ($NAPI_PLAT)..."
+
+        # Clean stale artifacts
+        rm -f "$pkg_dir/$binary_name"
+
+        # Run build in a subshell to avoid directory leaks on failure
+        if ! (
+            cd "$pkg_dir"
+            bun install 2>&1
+
+            if ! bunx @napi-rs/cli build --platform --release \
+                --target "$NAPI_TARGET" \
+                --manifest-path "$manifest" \
+                --output-dir .; then
+                exit 1
+            fi
+
+            if [ ! -f "$binary_name" ]; then
+                exit 2
+            fi
+        ); then
+            if [ "$required" = "true" ]; then
+                fail "Failed to build $pkg_name"
+            else
+                warn "Failed to build $pkg_name (skipping)"
+                return 1
+            fi
+        fi
+
+        if [ ! -f "$pkg_dir/$binary_name" ]; then
+            if [ "$required" = "true" ]; then
+                fail "Build produced no output: $binary_name"
+            else
+                warn "Build produced no output: $binary_name (skipping)"
+                return 1
+            fi
+        fi
+
+        success "Built $binary_name ($(du -h "$pkg_dir/$binary_name" | cut -f1 | xargs))"
+
+        mkdir -p "$install_dir"
+        cp "$pkg_dir/$binary_name" "$install_dir/"
+        success "Installed to $install_dir/$binary_name"
+    }
+fi
+
 # === Pre-flight Checks ===
 
 echo "Checking system requirements..."
@@ -271,6 +372,23 @@ fi
 if ! command -v curl &> /dev/null; then
     fail "curl is not installed" \
         "Please install curl first:\n  Ubuntu/Debian: sudo apt install curl\n  Fedora: sudo dnf install curl"
+fi
+
+# In local mode, Rust and Bun are hard prerequisites
+if [ "$LOCAL_MODE" = true ]; then
+    if ! command -v cargo &> /dev/null; then
+        fail "Rust toolchain not found" "Install Rust: https://rustup.rs"
+    fi
+    if ! command -v bun &> /dev/null; then
+        fail "Bun not found" "Install Bun: https://bun.sh"
+    fi
+    if ! command -v rsync &> /dev/null; then
+        fail "rsync not found" "Install rsync:\n  macOS: brew install rsync\n  Ubuntu/Debian: sudo apt install rsync"
+    fi
+    if ! command -v cmake &> /dev/null; then
+        warn "cmake not found — perception (video processing) will be skipped"
+        echo "  Optional: brew install cmake (or apt install cmake)"
+    fi
 fi
 
 # Check for Claude Code (optional - user may install for other clients only)
@@ -308,60 +426,69 @@ NEED_YTDLP=false
 NEED_WHISPER=false
 NEED_PIP=false
 
-# Add Python user bin to PATH for detection (pip installs go here)
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS: ~/Library/Python/3.X/bin
-    for pyver in 3.13 3.12 3.11 3.10 3.9 3.8; do
-        if [ -d "$HOME/Library/Python/$pyver/bin" ]; then
-            export PATH="$HOME/Library/Python/$pyver/bin:$PATH"
-            break
-        fi
-    done
+if [ "$LOCAL_MODE" = true ]; then
+    # Local mode: skip dependency auto-install, developer manages their own tools
+    INSTALL_LIST="\n  ${C4}•${NC} Lucid Memory server (from local source)"
+    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Native modules (built from source)"
+    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} BGE embedding model (~220MB)"
+    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Whisper model (74MB)"
+    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Claude Code hooks"
 else
-    # Linux: ~/.local/bin
-    export PATH="$HOME/.local/bin:$PATH"
-fi
+    # Add Python user bin to PATH for detection (pip installs go here)
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS: ~/Library/Python/3.X/bin
+        for pyver in 3.13 3.12 3.11 3.10 3.9 3.8; do
+            if [ -d "$HOME/Library/Python/$pyver/bin" ]; then
+                export PATH="$HOME/Library/Python/$pyver/bin:$PATH"
+                break
+            fi
+        done
+    else
+        # Linux: ~/.local/bin
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
 
-# Check for Homebrew on macOS (needed for other installs)
-if [[ "$OSTYPE" == "darwin"* ]] && ! command -v brew &> /dev/null; then
-    NEED_BREW=true
-    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Homebrew (package manager for macOS)"
-fi
+    # Check for Homebrew on macOS (needed for other installs)
+    if [[ "$OSTYPE" == "darwin"* ]] && ! command -v brew &> /dev/null; then
+        NEED_BREW=true
+        INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Homebrew (package manager for macOS)"
+    fi
 
-# Check for Bun
-if ! command -v bun &> /dev/null; then
-    NEED_BUN=true
-    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Bun (JavaScript runtime)"
-fi
+    # Check for Bun
+    if ! command -v bun &> /dev/null; then
+        NEED_BUN=true
+        INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Bun (JavaScript runtime)"
+    fi
 
-# Check for ffmpeg
-if ! command -v ffmpeg &> /dev/null; then
-    NEED_FFMPEG=true
-    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} ffmpeg (video processing)"
-fi
+    # Check for ffmpeg
+    if ! command -v ffmpeg &> /dev/null; then
+        NEED_FFMPEG=true
+        INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} ffmpeg (video processing)"
+    fi
 
-# Check for yt-dlp
-if ! command -v yt-dlp &> /dev/null; then
-    NEED_YTDLP=true
-    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} yt-dlp (video downloads)"
-fi
+    # Check for yt-dlp
+    if ! command -v yt-dlp &> /dev/null; then
+        NEED_YTDLP=true
+        INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} yt-dlp (video downloads)"
+    fi
 
-# Check for pip (needed for whisper)
-if ! command -v pip3 &> /dev/null && ! command -v pip &> /dev/null; then
-    NEED_PIP=true
-fi
+    # Check for pip (needed for whisper)
+    if ! command -v pip3 &> /dev/null && ! command -v pip &> /dev/null; then
+        NEED_PIP=true
+    fi
 
-# Check for whisper
-if ! command -v whisper &> /dev/null; then
-    NEED_WHISPER=true
-    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} OpenAI Whisper (audio transcription)"
-fi
+    # Check for whisper
+    if ! command -v whisper &> /dev/null; then
+        NEED_WHISPER=true
+        INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} OpenAI Whisper (audio transcription)"
+    fi
 
-# Always installing these
-INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Lucid Memory server"
-INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} BGE embedding model (~220MB)"
-INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Whisper model (74MB)"
-INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Claude Code hooks"
+    # Always installing these
+    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Lucid Memory server"
+    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} BGE embedding model (~220MB)"
+    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Whisper model (74MB)"
+    INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Claude Code hooks"
+fi
 
 # === Show installation summary ===
 
@@ -392,6 +519,14 @@ echo ""
 show_progress  # Step 1: Pre-flight checks
 
 # === Install Dependencies ===
+
+if [ "$LOCAL_MODE" = true ]; then
+    # Local mode: just confirm tools are present (already validated in pre-flight)
+    BUN_VER=$(bun --version 2>/dev/null || echo "unknown")
+    CARGO_VER=$(cargo --version 2>/dev/null | awk '{print $2}' || echo "unknown")
+    success "Bun $BUN_VER"
+    success "Rust $CARGO_VER"
+else
 
 # Install Homebrew if needed (macOS only)
 if [ "$NEED_BREW" = true ]; then
@@ -577,6 +712,8 @@ else
     success "Whisper already installed"
 fi
 
+fi # end of non-local dependency install
+
 show_progress  # Step 2: Install dependencies
 
 # === Create Lucid Directory ===
@@ -595,67 +732,124 @@ show_progress  # Step 3: Create directory
 
 # === Install Lucid Server ===
 
-echo ""
-echo "Downloading Lucid Memory..."
+SOURCE_DIR=""
 
-TEMP_DIR=$(mktemp -d)
-INSTALL_TEMP_DIR="$TEMP_DIR"
-cd "$TEMP_DIR"
+if [ "$LOCAL_MODE" = true ]; then
+    echo ""
+    echo "Installing from local source ($REPO_ROOT)..."
+    SOURCE_DIR="$REPO_ROOT"
 
-# Clone the repository (shallow clone for speed)
-# GIT_TERMINAL_PROMPT=0 prevents git from asking for credentials if repo not found
-DOWNLOAD_OK=false
-if GIT_TERMINAL_PROMPT=0 git clone --depth 1 https://github.com/JasonDocton/lucid-memory.git 2>/dev/null; then
-    DOWNLOAD_OK=true
-fi
+    # Guard: verify source dir is still valid before rsync
+    if [ ! -d "$SOURCE_DIR/packages" ]; then
+        fail "Source directory invalid" "$SOURCE_DIR/packages does not exist. Run from the repo root."
+    fi
 
-# Fallback: download zip archive if git clone fails
-if [ "$DOWNLOAD_OK" = false ]; then
-    warn "Git clone failed, trying zip download..."
-    # Clean up partial git clone directory if it exists
-    rm -rf "lucid-memory" 2>/dev/null
-    if curl -fsSL "https://github.com/JasonDocton/lucid-memory/archive/refs/heads/main.zip" -o "lucid-memory.zip" 2>/dev/null; then
-        if command -v unzip &> /dev/null; then
-            unzip -q "lucid-memory.zip" && mv "lucid-memory-main" "lucid-memory" && DOWNLOAD_OK=true
-        elif command -v python3 &> /dev/null; then
-            python3 -c "import zipfile; zipfile.ZipFile('lucid-memory.zip').extractall()" && mv "lucid-memory-main" "lucid-memory" && DOWNLOAD_OK=true
+    # Use rsync to sync source files, preserving .node binaries and node_modules
+    for pkg in lucid-server lucid-native lucid-perception; do
+        src="$SOURCE_DIR/packages/$pkg"
+        case "$pkg" in
+            lucid-server)     dest="$LUCID_DIR/server" ;;
+            lucid-native)     dest="$LUCID_DIR/native" ;;
+            lucid-perception) dest="$LUCID_DIR/perception" ;;
+        esac
+
+        [ -d "$src" ] || continue
+        mkdir -p "$dest"
+
+        rsync -a \
+            --exclude node_modules \
+            --exclude .turbo \
+            --exclude '*.node' \
+            "$src/" "$dest/"
+    done
+    success "Server source synced from local checkout"
+else
+    echo ""
+    echo "Downloading Lucid Memory..."
+
+    TEMP_DIR=$(mktemp -d)
+    INSTALL_TEMP_DIR="$TEMP_DIR"
+    cd "$TEMP_DIR"
+
+    # Clone the repository (shallow clone for speed)
+    # GIT_TERMINAL_PROMPT=0 prevents git from asking for credentials if repo not found
+    DOWNLOAD_OK=false
+    if GIT_TERMINAL_PROMPT=0 git clone --depth 1 https://github.com/JasonDocton/lucid-memory.git 2>/dev/null; then
+        DOWNLOAD_OK=true
+    fi
+
+    # Fallback: download zip archive if git clone fails
+    if [ "$DOWNLOAD_OK" = false ]; then
+        warn "Git clone failed, trying zip download..."
+        # Clean up partial git clone directory if it exists
+        rm -rf "lucid-memory" 2>/dev/null
+        if curl -fsSL "https://github.com/JasonDocton/lucid-memory/archive/refs/heads/main.zip" -o "lucid-memory.zip" 2>/dev/null; then
+            if command -v unzip &> /dev/null; then
+                unzip -q "lucid-memory.zip" && mv "lucid-memory-main" "lucid-memory" && DOWNLOAD_OK=true
+            elif command -v python3 &> /dev/null; then
+                python3 -c "import zipfile; zipfile.ZipFile('lucid-memory.zip').extractall()" && mv "lucid-memory-main" "lucid-memory" && DOWNLOAD_OK=true
+            fi
+            rm -f "lucid-memory.zip"
         fi
-        rm -f "lucid-memory.zip"
+    fi
+
+    if [ "$DOWNLOAD_OK" = false ]; then
+        fail "Could not download Lucid Memory" \
+            "Please check your internet connection and try again.\n\nIf the problem persists, try downloading manually:\n  https://github.com/JasonDocton/lucid-memory"
+    fi
+
+    SOURCE_DIR="$TEMP_DIR/lucid-memory"
+
+    # Copy the server
+    if [ -d "$SOURCE_DIR/packages/lucid-server" ]; then
+        rm -rf "$LUCID_DIR/server" 2>/dev/null || true
+        if ! cp -r "$SOURCE_DIR/packages/lucid-server" "$LUCID_DIR/server"; then
+            fail "Failed to copy server files" \
+                "Could not copy server to $LUCID_DIR/server"
+        fi
+        if [ ! -d "$LUCID_DIR/server" ]; then
+            fail "Server installation failed" \
+                "Server directory not created at $LUCID_DIR/server"
+        fi
+    else
+        fail "Invalid repository structure" \
+            "The downloaded repository is missing required files."
+    fi
+
+    # Copy native package
+    if [ -d "$SOURCE_DIR/packages/lucid-native" ]; then
+        rm -rf "$LUCID_DIR/native" 2>/dev/null || true
+        cp -r "$SOURCE_DIR/packages/lucid-native" "$LUCID_DIR/native"
+    fi
+
+    # Copy perception package (video processing)
+    if [ -d "$SOURCE_DIR/packages/lucid-perception" ]; then
+        rm -rf "$LUCID_DIR/perception" 2>/dev/null || true
+        cp -r "$SOURCE_DIR/packages/lucid-perception" "$LUCID_DIR/perception"
     fi
 fi
 
-if [ "$DOWNLOAD_OK" = false ]; then
-    fail "Could not download Lucid Memory" \
-        "Please check your internet connection and try again.\n\nIf the problem persists, try downloading manually:\n  https://github.com/JasonDocton/lucid-memory"
-fi
+NATIVE_READY=false
+PERCEPTION_READY=false
 
-# Copy the server
-if [ -d "lucid-memory/packages/lucid-server" ]; then
-    rm -rf "$LUCID_DIR/server" 2>/dev/null || true
-    if ! cp -r "lucid-memory/packages/lucid-server" "$LUCID_DIR/server"; then
-        fail "Failed to copy server files" \
-            "Could not copy server to $LUCID_DIR/server"
+if [ "$LOCAL_MODE" = true ]; then
+    # Local mode: always build from source
+    build_native_from_source "lucid-native" true && NATIVE_READY=true
+
+    if ! command -v cmake &> /dev/null; then
+        warn "cmake not found — skipping perception build (video processing)"
+        echo "  Install cmake to build perception: brew install cmake"
+    else
+        build_native_from_source "lucid-perception" false && PERCEPTION_READY=true
     fi
-    if [ ! -d "$LUCID_DIR/server" ]; then
-        fail "Server installation failed" \
-            "Server directory not created at $LUCID_DIR/server"
+
+    if [ "$NATIVE_READY" = true ]; then
+        success "Native module ready (100x faster retrieval)"
+    fi
+    if [ "$PERCEPTION_READY" = true ]; then
+        success "Perception module ready (video processing enabled)"
     fi
 else
-    fail "Invalid repository structure" \
-        "The downloaded repository is missing required files."
-fi
-
-# Copy native package
-if [ -d "lucid-memory/packages/lucid-native" ]; then
-    rm -rf "$LUCID_DIR/native" 2>/dev/null || true
-    cp -r "lucid-memory/packages/lucid-native" "$LUCID_DIR/native"
-fi
-
-# Copy perception package (video processing)
-if [ -d "lucid-memory/packages/lucid-perception" ]; then
-    rm -rf "$LUCID_DIR/perception" 2>/dev/null || true
-    cp -r "lucid-memory/packages/lucid-perception" "$LUCID_DIR/perception"
-fi
 
 # Detect if the system uses musl libc (Alpine, Void, etc.)
 is_musl() {
@@ -703,7 +897,6 @@ detect_native_binary() {
 }
 
 NATIVE_BINARY=$(detect_native_binary)
-NATIVE_READY=false
 
 # Check if pre-built binary exists in the repo
 if [ -n "$NATIVE_BINARY" ] && [ -f "$LUCID_DIR/native/$NATIVE_BINARY" ]; then
@@ -745,11 +938,11 @@ fi
 # If still no binary, try to build with Rust
 if [ "$NATIVE_READY" = false ]; then
     # Copy Rust crates for building
-    if [ -d "lucid-memory/crates" ]; then
+    if [ -d "$SOURCE_DIR/crates" ]; then
         rm -rf "$LUCID_DIR/crates" 2>/dev/null || true
-        cp -r "lucid-memory/crates" "$LUCID_DIR/crates"
-        cp "lucid-memory/Cargo.toml" "$LUCID_DIR/Cargo.toml"
-        cp "lucid-memory/Cargo.lock" "$LUCID_DIR/Cargo.lock" 2>/dev/null || true
+        cp -r "$SOURCE_DIR/crates" "$LUCID_DIR/crates"
+        cp "$SOURCE_DIR/Cargo.toml" "$LUCID_DIR/Cargo.toml"
+        cp "$SOURCE_DIR/Cargo.lock" "$LUCID_DIR/Cargo.lock" 2>/dev/null || true
     fi
 
     if command -v cargo &> /dev/null; then
@@ -823,7 +1016,6 @@ detect_perception_binary() {
 }
 
 PERCEPTION_BINARY=$(detect_perception_binary)
-PERCEPTION_READY=false
 
 # Check if pre-built binary exists in the repo
 if [ -n "$PERCEPTION_BINARY" ] && [ -d "$LUCID_DIR/perception" ] && [ -f "$LUCID_DIR/perception/$PERCEPTION_BINARY" ]; then
@@ -901,6 +1093,8 @@ else
     echo "  Video processing will use fallback methods (slower)"
     echo "  To enable, install Rust: https://rustup.rs"
 fi
+
+fi # end of non-local native binary handling
 
 cd "$LUCID_DIR/server"
 
@@ -1018,64 +1212,75 @@ show_progress  # Step 4: Install server
 
 # === Embedding Provider ===
 
-# Built-in BGE-base-en-v1.5 model runs in-process (no external services needed)
-# OpenAI API key is an optional override for power users
-echo ""
-echo -e "${BOLD}Embedding provider:${NC}"
-echo "  Using built-in BGE-base-en-v1.5 model (no external services needed)"
-echo ""
-echo "  Optional: provide an OpenAI API key to use cloud embeddings instead."
-echo ""
-
-OPENAI_KEY=""
-if [ "$INTERACTIVE" = true ]; then
-    read -p "OpenAI API key (press Enter to skip): " OPENAI_KEY
-fi
-if [ -n "$OPENAI_KEY" ]; then
-    echo "OPENAI_API_KEY=$OPENAI_KEY" > "$LUCID_DIR/.env"
-    success "OpenAI configured as embedding provider"
-else
+if [ "$LOCAL_MODE" = true ]; then
     success "Using built-in BGE embeddings (recommended)"
+else
+    # Built-in BGE-base-en-v1.5 model runs in-process (no external services needed)
+    # OpenAI API key is an optional override for power users
+    echo ""
+    echo -e "${BOLD}Embedding provider:${NC}"
+    echo "  Using built-in BGE-base-en-v1.5 model (no external services needed)"
+    echo ""
+    echo "  Optional: provide an OpenAI API key to use cloud embeddings instead."
+    echo ""
+
+    OPENAI_KEY=""
+    if [ "$INTERACTIVE" = true ]; then
+        read -p "OpenAI API key (press Enter to skip): " OPENAI_KEY
+    fi
+    if [ -n "$OPENAI_KEY" ]; then
+        echo "OPENAI_API_KEY=$OPENAI_KEY" > "$LUCID_DIR/.env"
+        success "OpenAI configured as embedding provider"
+    else
+        success "Using built-in BGE embeddings (recommended)"
+    fi
 fi
 show_progress  # Step 5: Embedding provider
 
 # === Client Selection ===
 
-echo ""
-echo -e "${BOLD}Which AI coding assistants do you use?${NC}"
-echo "  [1] Claude Code"
-echo "  [2] OpenAI Codex"
-echo "  [3] OpenCode"
-echo ""
-echo "  Enter numbers separated by spaces (e.g. '1 3')"
-echo "  Press Enter for all clients."
-echo ""
-
 INSTALL_CLAUDE=false
 INSTALL_CODEX=false
 INSTALL_OPENCODE=false
 
-if [ "$INTERACTIVE" = true ]; then
-    read -p "Choice: " CLIENT_INPUT
-    CLIENT_INPUT=${CLIENT_INPUT:-"1 2 3"}
+if [ "$LOCAL_MODE" = true ]; then
+    # Local mode: default to Claude Code only
+    INSTALL_CLAUDE=true
 else
-    echo "Non-interactive mode, defaulting to Claude Code only..."
-    CLIENT_INPUT="1"
+    echo ""
+    echo -e "${BOLD}Which AI coding assistants do you use?${NC}"
+    echo "  [1] Claude Code"
+    echo "  [2] OpenAI Codex"
+    echo "  [3] OpenCode"
+    echo ""
+    echo "  Enter numbers separated by spaces (e.g. '1 3')"
+    echo "  Press Enter for all clients."
+    echo ""
+
+    if [ "$INTERACTIVE" = true ]; then
+        read -p "Choice: " CLIENT_INPUT
+        CLIENT_INPUT=${CLIENT_INPUT:-"1 2 3"}
+    else
+        echo "Non-interactive mode, defaulting to Claude Code only..."
+        CLIENT_INPUT="1"
+    fi
 fi
 
-# Parse space-separated numbers
-VALID_SELECTION=false
-for num in $CLIENT_INPUT; do
-    case $num in
-        1) INSTALL_CLAUDE=true; VALID_SELECTION=true ;;
-        2) INSTALL_CODEX=true; VALID_SELECTION=true ;;
-        3) INSTALL_OPENCODE=true; VALID_SELECTION=true ;;
-    esac
-done
+if [ "$LOCAL_MODE" = false ]; then
+    # Parse space-separated numbers
+    VALID_SELECTION=false
+    for num in $CLIENT_INPUT; do
+        case $num in
+            1) INSTALL_CLAUDE=true; VALID_SELECTION=true ;;
+            2) INSTALL_CODEX=true; VALID_SELECTION=true ;;
+            3) INSTALL_OPENCODE=true; VALID_SELECTION=true ;;
+        esac
+    done
 
-if [ "$VALID_SELECTION" = false ]; then
-    warn "Invalid selection, defaulting to Claude Code"
-    INSTALL_CLAUDE=true
+    if [ "$VALID_SELECTION" = false ]; then
+        warn "Invalid selection, defaulting to Claude Code"
+        INSTALL_CLAUDE=true
+    fi
 fi
 
 # === Database Mode (only if multiple clients) ===
@@ -1210,14 +1415,17 @@ fi
 
 # === Auto-Update Preference ===
 
-echo ""
-echo -e "${BOLD}Automatic updates:${NC}"
-echo "  Lucid Memory can automatically check for and install updates"
-echo "  when the server starts. Your data is always preserved."
-echo ""
-
 AUTO_UPDATE=false
-if [ "$INTERACTIVE" = true ]; then
+if [ "$LOCAL_MODE" = true ]; then
+    # Local mode: disable auto-update (developer manages updates via git)
+    AUTO_UPDATE=false
+elif [ "$INTERACTIVE" = true ]; then
+    echo ""
+    echo -e "${BOLD}Automatic updates:${NC}"
+    echo "  Lucid Memory can automatically check for and install updates"
+    echo "  when the server starts. Your data is always preserved."
+    echo ""
+
     read -p "Enable automatic updates? [Y/n]: " AUTO_UPDATE_CHOICE
     AUTO_UPDATE_CHOICE=${AUTO_UPDATE_CHOICE:-Y}
     if [[ "$AUTO_UPDATE_CHOICE" =~ ^[Yy]$ ]]; then
@@ -1622,7 +1830,9 @@ show_progress  # Step 7: Install hooks & PATH
 
 # === Cleanup ===
 
-rm -rf "$TEMP_DIR"
+if [ -n "${TEMP_DIR:-}" ]; then
+    rm -rf "$TEMP_DIR"
+fi
 
 # === Post-Installation Verification ===
 
@@ -1670,10 +1880,16 @@ fi
 
 # === Restart Claude Code ===
 
-if [ "$INSTALL_CLAUDE" = true ]; then
+if [ "$INSTALL_CLAUDE" = true ] && [ "$LOCAL_MODE" = false ]; then
     restart_claude_code
 fi
 show_progress  # Step 8: Restart Claude Code
+
+# Kill old server so new binary gets picked up on next use
+if pgrep -f "bun run.*/\.lucid/server/src/" >/dev/null 2>&1; then
+    pkill -f "bun run.*/\.lucid/server/src/" 2>/dev/null || true
+    success "Stopped running lucid-server (will restart on next use)"
+fi
 
 # === Done! ===
 
@@ -1688,17 +1904,24 @@ echo -e "          ${C3}M ${C4}E ${C5}M ${C6}O ${C5}R ${C4}Y${NC}"
 echo ""
 echo -e "       ${GREEN}✓${NC} ${BOLD}Installed Successfully!${NC}"
 echo ""
-echo -e "  Just use your AI coding assistant normally -"
-echo -e "  your memories build automatically over time."
-echo ""
-echo -e "  ${DIM}Troubleshooting:${NC}"
-echo -e "  ${C4}lucid status${NC}  - Check if everything is working"
-echo -e "  ${C4}lucid stats${NC}   - View memory statistics"
-echo ""
-echo -e "  ${DIM}To uninstall:${NC}"
-echo -e "  ${C4}curl -fsSL https://lucidmemory.dev/uninstall | bash${NC}"
-echo ""
-echo -e "${DIM}  ─────────────────────────────────────────${NC}"
-echo ""
-echo -e "  ${YELLOW}Note:${NC} Please restart your terminal to use the 'lucid' command."
+if [ "$LOCAL_MODE" = true ]; then
+    echo -e "  Installed from local source at ${BOLD}$REPO_ROOT${NC}"
+    echo ""
+    echo -e "  ${C4}lucid status${NC}  - Check if everything is working"
+    echo -e "  ${C4}lucid stats${NC}   - View memory statistics"
+else
+    echo -e "  Just use your AI coding assistant normally -"
+    echo -e "  your memories build automatically over time."
+    echo ""
+    echo -e "  ${DIM}Troubleshooting:${NC}"
+    echo -e "  ${C4}lucid status${NC}  - Check if everything is working"
+    echo -e "  ${C4}lucid stats${NC}   - View memory statistics"
+    echo ""
+    echo -e "  ${DIM}To uninstall:${NC}"
+    echo -e "  ${C4}curl -fsSL https://lucidmemory.dev/uninstall | bash${NC}"
+    echo ""
+    echo -e "${DIM}  ─────────────────────────────────────────${NC}"
+    echo ""
+    echo -e "  ${YELLOW}Note:${NC} Please restart your terminal to use the 'lucid' command."
+fi
 echo ""
