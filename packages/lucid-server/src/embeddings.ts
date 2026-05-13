@@ -92,6 +92,7 @@ export interface EmbeddingConfig {
 	model?: string
 	ollamaHost?: string
 	openaiApiKey?: string
+	openaiBaseUrl?: string
 }
 
 export interface EmbeddingResult {
@@ -244,7 +245,12 @@ export class EmbeddingClient {
 				const response = await fetch(`${host}/api/tags`)
 				return response.ok
 			}
-			// OpenAI: just check if API key exists
+			if (this.config.openaiBaseUrl) {
+				const response = await fetch(`${this.config.openaiBaseUrl}/models`, {
+					signal: AbortSignal.timeout(3000),
+				})
+				return response.ok
+			}
 			return !!this.config.openaiApiKey
 		} catch {
 			return false
@@ -360,19 +366,22 @@ export class EmbeddingClient {
 	}
 
 	private async embedOpenAIBatch(texts: string[]): Promise<EmbeddingResult[]> {
+		const baseUrl = this.config.openaiBaseUrl ?? "https://api.openai.com/v1"
 		const apiKey = this.config.openaiApiKey
-		if (!apiKey) {
+
+		if (!apiKey && !this.config.openaiBaseUrl) {
 			throw new Error("OpenAI API key required")
 		}
 
 		const model = this.config.model ?? defaultOpenaiModel
+		const headers: Record<string, string> = { "Content-Type": "application/json" }
+		if (apiKey) {
+			headers.Authorization = `Bearer ${apiKey}`
+		}
 
-		const response = await fetch("https://api.openai.com/v1/embeddings", {
+		const response = await fetch(`${baseUrl}/embeddings`, {
 			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${apiKey}`,
-			},
+			headers,
 			body: JSON.stringify({
 				model,
 				input: texts,
@@ -411,6 +420,18 @@ export async function detectProvider(): Promise<DetectProviderResult> {
 	const diagnostics: ProviderDiagnostics = {
 		nativeStatus: "module_unavailable",
 		openaiAvailable: false,
+	}
+
+	// 0. Explicit local embedding endpoint (LM Studio, Ollama OpenAI-compat, vLLM, etc.)
+	// biome-ignore lint/style/noProcessEnv: Config detection requires environment access
+	const embeddingUrl = process.env.LUCID_EMBEDDING_URL
+	if (embeddingUrl) {
+		// biome-ignore lint/style/noProcessEnv: Config detection requires environment access
+		const embeddingModel = process.env.LUCID_EMBEDDING_MODEL
+		return {
+			config: { provider: "openai", openaiBaseUrl: embeddingUrl, model: embeddingModel },
+			diagnostics,
+		}
 	}
 
 	// 1. Try native in-process embeddings (zero deps, best UX)

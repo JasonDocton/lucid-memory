@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### OpenAI-Compatible Local Embedding Endpoints
+
+Lucid Memory now supports any OpenAI-compatible embedding server as a drop-in backend — Ollama, LM Studio, vLLM, and others — without an API key.
+
+**Key features:**
+
+- **`LUCID_EMBEDDING_URL`** — Set to any OpenAI-compatible base URL (e.g. `http://localhost:11434/v1`). Checked first, highest priority in provider detection.
+- **`LUCID_EMBEDDING_MODEL`** — Override the embedding model name (e.g. `nomic-embed-text`).
+- **API key optional** — Local endpoints work without authentication.
+- **Long-context models** — Enables models like `nomic-embed-text` (8192-token context) as an alternative to the built-in BGE model (512-token limit).
+- **Endpoint probing** — `isAvailable()` probes `/models` on custom endpoints to verify availability before committing.
+
+**Usage:**
+
+```bash
+LUCID_EMBEDDING_URL=http://localhost:11434/v1 \
+LUCID_EMBEDDING_MODEL=nomic-embed-text \
+lucid-server
+```
+
+**Provider detection order:** `LUCID_EMBEDDING_URL` → local ONNX (BGE) → OpenAI → none.
+
+## [0.6.5] - 2026-02-20
+
+### Added
+
+- **Linux ARM64 pre-built binary** for `lucid-native` (`lucid-native.linux-arm64-gnu.node`) — previously required building from source on Linux ARM64.
+
+### Fixed
+
+**All `.node` binaries shipped since January 30th were macOS ARM64 Mach-O files regardless of target platform**, causing immediate segfaults on Linux and Windows. Only macOS Apple Silicon users were unaffected.
+
+**Root cause:** Two interacting CI bugs: (1) the upload step used `path: *.node`, uploading all checked-out `.node` files per artifact rather than only the freshly built one; (2) the rename step picked the first `.node` file alphabetically from checkout — the pre-existing `darwin-arm64` binary — and renamed it to the target platform name, overwriting the correct build output.
+
+**Fixes:**
+
+- Clean stale binaries before building so only fresh build output exists
+- Upload only the specific target file (`lucid-native.{platform}.node`) instead of `*.node`
+- Add binary format validation (`file` command checks ELF/Mach-O/PE32+) in both publish and release jobs
+- Add format validation to `install.sh` download fallback — wrong-format downloads are rejected and deleted
+- Fix release job permissions for asset uploads
+
+Six layers now prevent recurrence: pre-build clean → post-build verify → targeted upload → publish validation → release validation → installer validation.
+
+**Platform support after this fix:**
+
+| Platform | lucid-native | lucid-perception |
+|----------|:---:|:---:|
+| macOS ARM64 (Apple Silicon) | pre-built | pre-built |
+| macOS x64 (Intel) | build from source | pre-built |
+| Linux x64 | pre-built | pre-built |
+| Linux ARM64 | pre-built (new) | build from source |
+| Windows x64 | pre-built | pre-built |
+
+## [0.6.4] - 2026-02-20
+
+### Fixed
+
+#### Embedding Provider Diagnostics
+
+Silent embedding failures now surface with actionable diagnostics instead of falling through to `null`.
+
+- **`detectProvider()` returns `ProviderDiagnostics`** — per-provider failure reasons recorded; `lucid status` now shows exactly what was tried and why each provider was skipped (e.g. `Native: model failed to load (ORT error)`, `OpenAI: no OPENAI_API_KEY set`, `Ollama: connection refused`). Previously checked file existence only — a corrupt or incompatible model file would still show as "configured".
+- **`retrieve()` returns `RetrievalResult`** — includes `method` (`"semantic"` | `"recency"`) and `warning` field. `memory_query` responses surface these fields so callers can detect when results are ranked by recency only due to embedding failure.
+
+## [0.6.3] - 2026-02-20
+
+### Fixed
+
+- Switched built-in ONNX embedding model from FP16 (`model_fp16.onnx`) to INT8 quantized (`model_quantized.onnx`). The FP16 model contains graph optimizations (`SimplifiedLayerNormFusion`, `InsertedPrecisionFreeCast`) incompatible with `ort` 2.0.0-rc.11, causing embeddings to silently fail to load and report "No embedding provider configured". The quantized model (110MB vs 218MB) is fully compatible and produces equivalent retrieval quality.
+- Installers now clean up the old FP16 model file on re-install.
+
+## [0.6.2] - 2026-02-15
+
+### Fixed
+
+- Removed dead NAPI bindings that were exported but never called from TypeScript
+- Removed orphaned struct fields causing Clippy warnings
+- Resolved remaining Biome lint issues introduced by 0.6.1
+
+## [0.6.1] - 2026-02-15
+
+### Added
+
+- **`visual_list` MCP tool** — Browse and filter visual memories by project, media type, and recency. Previously `queryVisualMemories()` was unreachable from the MCP surface.
+
+### Fixed
+
+The 0.6.0 5-gate audit incorrectly made 5 storage methods private and deleted them to clear Biome lint errors, breaking wired features. This release restores and wires each:
+
+| Method | Wired to |
+|--------|---------|
+| `queryVisualMemories()` | New `visual_list` MCP tool |
+| `getVisualEmbedding()` | Consolidation visual pruning guard (skip unprocessed visuals) |
+| `getEpisode()` | Public API for single-episode lookup |
+| `updateProjectContext()` | `store()` flow for project metadata accumulation |
+| `hasEmbedding()` | Public API for per-memory embedding existence check |
+
+`memory_consolidation_status` enriched with episode diagnostics (recent episodes with event counts and boundary types) and pending embedding counts (memories awaiting background processing).
+
 ## [0.6.0] - 2026-02-15
 
 ### Added
