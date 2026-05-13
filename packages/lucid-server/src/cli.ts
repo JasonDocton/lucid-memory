@@ -427,10 +427,26 @@ Examples:
 					embeddingStatus = embeddingDiagnostics.ollamaError ?? "not available"
 				}
 			} else if (embeddingConfig?.provider === "openai") {
-				embeddingStatus = embeddingConfig.openaiApiKey
-					? "ready (OpenAI API)"
-					: "no API key"
-				isEmbeddingHealthy = !!embeddingConfig.openaiApiKey
+				if (embeddingConfig.openaiBaseUrl) {
+					try {
+						const probe = await fetch(`${embeddingConfig.openaiBaseUrl}/models`, {
+							signal: AbortSignal.timeout(3000),
+						})
+						if (probe.ok) {
+							embeddingStatus = `ready (${embeddingConfig.openaiBaseUrl})`
+							isEmbeddingHealthy = true
+						} else {
+							embeddingStatus = `unreachable (${embeddingConfig.openaiBaseUrl}) — HTTP ${probe.status}`
+						}
+					} catch {
+						embeddingStatus = `unreachable (${embeddingConfig.openaiBaseUrl})`
+					}
+				} else {
+					embeddingStatus = embeddingConfig.openaiApiKey
+						? "ready (OpenAI API)"
+						: "no API key"
+					isEmbeddingHealthy = !!embeddingConfig.openaiApiKey
+				}
 			}
 
 			// Database status
