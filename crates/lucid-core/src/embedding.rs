@@ -3,12 +3,14 @@
 //! Runs BGE-base directly via ONNX Runtime — no external services needed.
 //! Produces 768-dimensional embeddings with mean pooling + L2 normalization.
 
-use ndarray::{Array2, ArrayD};
+use ndarray::{Array2, Array3, ArrayView2, Axis};
 use ort::session::Session;
 use ort::value::Tensor;
 use parking_lot::Mutex;
 use std::path::PathBuf;
-use tokenizers::{Encoding, PaddingDirection, PostProcessor, Tokenizer, TruncationDirection};
+use tokenizers::{
+	Encoding, PaddingDirection, PaddingStrategy, PostProcessor, Tokenizer, TruncationDirection,
+};
 
 /// BGE-base-en-v1.5 has 512 position embeddings, including special tokens.
 const MAX_SEQUENCE_LENGTH: usize = 512;
@@ -70,6 +72,15 @@ pub enum EmbeddingError {
 }
 
 fn configure_tokenizer(tokenizer: &mut Tokenizer) -> Result<(), EmbeddingError> {
+	// Bound the tokenizer's padding allocation and round-up arithmetic before encoding.
+	if let Some(padding) = tokenizer.get_padding_mut() {
+		if let PaddingStrategy::Fixed(width) = &mut padding.strategy {
+			*width = (*width).min(MAX_SEQUENCE_LENGTH);
+		}
+		padding.pad_to_multiple_of = padding
+			.pad_to_multiple_of
+			.map(|n| n.min(MAX_SEQUENCE_LENGTH));
+	}
 	let mut truncation = tokenizer.get_truncation().cloned().unwrap_or_default();
 	truncation.max_length = truncation.max_length.min(MAX_SEQUENCE_LENGTH);
 	let special_tokens = tokenizer
@@ -93,17 +104,54 @@ fn encode_batch(tokenizer: &Tokenizer, texts: &[&str]) -> Result<Vec<Encoding>, 
 	let mut rows = tokenizer
 		.encode_batch(texts.to_vec(), true)
 		.map_err(|e| EmbeddingError::Tokenizer(e.to_string()))?;
-	if let Some(padding) = tokenizer.get_padding() {
-		// Content and special tokens already fit. Only configured padding can exceed the cap.
-		let side = match padding.direction {
-			PaddingDirection::Left => TruncationDirection::Left,
-			PaddingDirection::Right => TruncationDirection::Right,
+	let padding_side = tokenizer.get_padding().map(|p| p.direction);
+	for row in rows
+		.iter_mut()
+		.filter(|row| row.len() > MAX_SEQUENCE_LENGTH)
+	{
+		let mask = row.get_attention_mask();
+		let (discarded, side) = match padding_side {
+			Some(PaddingDirection::Left) => (
+				&mask[..row.len() - MAX_SEQUENCE_LENGTH],
+				TruncationDirection::Left,
+			),
+			_ => (&mask[MAX_SEQUENCE_LENGTH..], TruncationDirection::Right),
 		};
-		for row in &mut rows {
-			row.truncate(MAX_SEQUENCE_LENGTH, 0, side);
+		// Only trim padding. A custom postprocessor can expand the already-truncated content.
+		if discarded.iter().any(|&m| m != 0) {
+			return Err(EmbeddingError::Tokenizer(format!(
+				"postprocessed input cannot fit within {MAX_SEQUENCE_LENGTH} positions without dropping attended tokens"
+			)));
 		}
+		row.truncate(MAX_SEQUENCE_LENGTH, 0, side);
 	}
 	Ok(rows)
+}
+
+fn pool_embedding(hidden: &ArrayView2<'_, f32>, mask: &[u32]) -> Vec<f32> {
+	let mut seq_len = 0u16;
+	let mut pooled = vec![0.0f32; hidden.ncols()];
+	for (t, &attended) in mask.iter().enumerate() {
+		if attended == 0 {
+			continue;
+		}
+		seq_len += 1;
+		for (sum, &value) in pooled.iter_mut().zip(hidden.row(t)) {
+			*sum += value;
+		}
+	}
+	if seq_len > 0 {
+		for v in &mut pooled {
+			*v /= f32::from(seq_len);
+		}
+	}
+	let norm = pooled.iter().map(|v| v * v).sum::<f32>().sqrt();
+	if norm > 0.0 {
+		for v in &mut pooled {
+			*v /= norm;
+		}
+	}
+	pooled
 }
 
 impl EmbeddingModel {
@@ -191,7 +239,7 @@ impl EmbeddingModel {
 		input_ids_tensor: Tensor<i64>,
 		attention_mask_tensor: Tensor<i64>,
 		token_type_tensor: Tensor<i64>,
-	) -> Result<(ArrayD<f32>, usize), EmbeddingError> {
+	) -> Result<Array3<f32>, EmbeddingError> {
 		let mut session = self.session.lock();
 		let outputs = session.run(ort::inputs![
 			"input_ids" => input_ids_tensor,
@@ -201,8 +249,7 @@ impl EmbeddingModel {
 		let view = outputs[0]
 			.try_extract_array::<f32>()
 			.map_err(EmbeddingError::Ort)?;
-		let dim = view.shape().last().copied().unwrap_or(768);
-		Ok((view.into_owned(), dim))
+		Ok(view.into_dimensionality()?.into_owned())
 	}
 
 	/// Embed a batch of texts. Pads to max length in the batch for a single ONNX run.
@@ -251,43 +298,17 @@ impl EmbeddingModel {
 		let token_type_tensor = Tensor::from_array(token_type_arr)?;
 
 		// Run ONNX inference (lock scoped to run_inference)
-		let (output_array, hidden_dim) =
+		let output =
 			self.run_inference(input_ids_tensor, attention_mask_tensor, token_type_tensor)?;
 
 		// Mean pooling + L2 normalization (no lock held)
-		let mut results = Vec::with_capacity(batch_size);
-
-		for (i, enc) in encodings.iter().enumerate() {
-			let mut seq_len = 0u16;
-			let mut pooled = vec![0.0f32; hidden_dim];
-			for (t, &mask) in enc.get_attention_mask().iter().enumerate() {
-				if mask == 0 {
-					continue;
-				}
-				seq_len += 1;
-				for d in 0..hidden_dim {
-					pooled[d] += output_array[[i, t, d]];
-				}
-			}
-			if seq_len > 0 {
-				let divisor = f32::from(seq_len);
-				for v in &mut pooled {
-					*v /= divisor;
-				}
-			}
-
-			// L2 normalize
-			let norm: f32 = pooled.iter().map(|v| v * v).sum::<f32>().sqrt();
-			if norm > 0.0 {
-				for v in &mut pooled {
-					*v /= norm;
-				}
-			}
-
-			results.push(pooled);
-		}
-
-		Ok(results)
+		Ok(encodings
+			.iter()
+			.enumerate()
+			.map(|(i, enc)| {
+				pool_embedding(&output.index_axis(Axis(0), i), enc.get_attention_mask())
+			})
+			.collect())
 	}
 
 	/// Returns the model name.
@@ -320,7 +341,7 @@ mod tests {
 	use super::*;
 	use tokenizers::{
 		models::wordpiece::WordPiece, pre_tokenizers::whitespace::WhitespaceSplit,
-		processors::bert::BertProcessing, PaddingParams, PaddingStrategy,
+		processors::bert::BertProcessing, PaddingParams,
 	};
 
 	fn load_test_model() -> EmbeddingModel {
@@ -392,9 +413,13 @@ mod tests {
 	#[test]
 	fn test_padding_only_trimmed_when_it_exceeds_model_width() {
 		for direction in [PaddingDirection::Right, PaddingDirection::Left] {
-			for (fixed_width, multiple, expected_width) in
-				[(8, 6, 12), (512, 6, 512), (1024, 1, 512)]
-			{
+			for (fixed_width, multiple, expected_width) in [
+				(8, 6, 12),
+				(512, 6, 512),
+				(1024, 1, 512),
+				(usize::MAX, 2, 512),
+				(8, usize::MAX, 512),
+			] {
 				let mut tokenizer = wordpiece_tokenizer();
 				let _ = tokenizer.with_padding(Some(PaddingParams {
 					strategy: PaddingStrategy::Fixed(fixed_width),
@@ -434,6 +459,42 @@ mod tests {
 			configure_tokenizer(&mut tokenizer),
 			Err(EmbeddingError::Tokenizer(_))
 		));
+	}
+
+	#[test]
+	fn test_postprocessor_cannot_expand_content_past_the_model_limit() {
+		let processor = tokenizers::processors::template::TemplateProcessing::builder()
+			.try_single("[CLS] $A $A [SEP]")
+			.unwrap()
+			.special_tokens(vec![("[CLS]", 101), ("[SEP]", 102)])
+			.build()
+			.unwrap();
+		let mut tokenizer = wordpiece_tokenizer();
+		let _ = tokenizer.with_post_processor(Some(processor));
+		configure_tokenizer(&mut tokenizer).unwrap();
+		let text = "sun ".repeat(256); // 514 attended positions after the template repeats A
+		for direction in [
+			None,
+			Some(PaddingDirection::Right),
+			Some(PaddingDirection::Left),
+		] {
+			let _ = tokenizer.with_padding(direction.map(|direction| PaddingParams {
+				direction,
+				..Default::default()
+			}));
+			assert!(matches!(
+				encode_batch(&tokenizer, &[&text]),
+				Err(EmbeddingError::Tokenizer(_))
+			));
+		}
+	}
+
+	#[test]
+	fn test_pooling_skips_left_and_right_padding() {
+		let hidden = ndarray::arr2(&[[9.0, 9.0], [3.0, 0.0], [0.0, 4.0], [-9.0, 9.0]]);
+		let pooled = pool_embedding(&hidden.view(), &[0, 1, 1, 0]);
+		assert_eq!(pooled, [0.6, 0.8]);
+		assert_eq!(pool_embedding(&hidden.view(), &[0; 4]), [0.0, 0.0]);
 	}
 
 	// With model files in ~/.lucid/models or LUCID_TEST_MODEL_DIR:
