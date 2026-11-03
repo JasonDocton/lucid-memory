@@ -14,6 +14,22 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { generateGist } from "./gist.ts"
 
+import type { EmbeddingSpace } from "./embeddings.ts"
+
+// Every semantic comparison uses the same model and Float32 blob width.
+function embeddingFilter(space?: EmbeddingSpace): {
+	sql: string
+	args: (string | number)[]
+} {
+	if (!space) return { sql: "", args: [] }
+	const model = space.storageModel ?? space.model
+	if (space.dimensions === undefined) return { sql: " AND 0", args: [] }
+	return {
+		sql: " AND e.model = ? AND length(e.vector) = ?",
+		args: [model, space.dimensions * Float32Array.BYTES_PER_ELEMENT],
+	}
+}
+
 // ============================================================================
 // Native Rust Bindings (with TypeScript fallback)
 // ============================================================================
@@ -369,7 +385,12 @@ export class LucidStorage {
 		}
 		this.db.exec("PRAGMA foreign_keys = ON")
 
-		this.initSchema()
+		try {
+			this.initSchema()
+		} catch (error) {
+			this.db.close()
+			throw error
+		}
 	}
 
 	private initSchema(): void {
@@ -386,14 +407,6 @@ export class LucidStorage {
         emotional_weight REAL DEFAULT 0.5,
         project_id TEXT,
         tags TEXT DEFAULT '[]'
-      );
-
-      -- Embeddings for semantic search
-      CREATE TABLE IF NOT EXISTS embeddings (
-        memory_id TEXT PRIMARY KEY,
-        vector BLOB NOT NULL,
-        model TEXT NOT NULL,
-        FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
       );
 
       -- Associations between memories
@@ -429,7 +442,6 @@ export class LucidStorage {
       CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
       CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_access_history_memory ON access_history(memory_id);
-      CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(model);
       CREATE INDEX IF NOT EXISTS idx_associations_source ON associations(source_id);
       CREATE INDEX IF NOT EXISTS idx_associations_target ON associations(target_id);
 
@@ -523,14 +535,6 @@ export class LucidStorage {
         project_id TEXT                      -- Project context for Phase 3 boost
       );
 
-      -- Visual Memory Embeddings (from description text)
-      CREATE TABLE IF NOT EXISTS visual_embeddings (
-        visual_memory_id TEXT PRIMARY KEY,
-        vector BLOB NOT NULL,
-        model TEXT NOT NULL,
-        FOREIGN KEY (visual_memory_id) REFERENCES visual_memories(id) ON DELETE CASCADE
-      );
-
       -- Visual access history for ACT-R base-level activation
       CREATE TABLE IF NOT EXISTS visual_access_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -544,7 +548,6 @@ export class LucidStorage {
       CREATE INDEX IF NOT EXISTS idx_visual_memories_significance ON visual_memories(significance);
       CREATE INDEX IF NOT EXISTS idx_visual_memories_project ON visual_memories(project_id);
       CREATE INDEX IF NOT EXISTS idx_visual_access_memory ON visual_access_history(visual_memory_id);
-      CREATE INDEX IF NOT EXISTS idx_visual_embeddings_model ON visual_embeddings(model);
 
       -- Sessions for temporal context tracking (Phase 4)
       -- Sessions auto-expire after 30 minutes of inactivity
@@ -616,6 +619,61 @@ export class LucidStorage {
 				})
 				.immediate()
 		}
+		this.initEmbeddingCaches()
+	}
+
+	private initEmbeddingCaches(): void {
+		const installed = this.db.prepare(`SELECT count(*) AS n FROM sqlite_master
+			WHERE (type='index' AND name IN ('idx_embeddings_space','idx_visual_embeddings_space'))
+			OR (type='trigger' AND name IN ('invalidate_embeddings','invalidate_visual_embeddings'))`)
+		const current = () => (installed.get() as { n: number }).n === 4
+		if (current()) return
+		this.db
+			.transaction(() => {
+				if (current()) return
+				for (const [table, id, parent, text] of [
+					["embeddings", "memory_id", "memories", "content"],
+					[
+						"visual_embeddings",
+						"visual_memory_id",
+						"visual_memories",
+						"description",
+					],
+				] as const) {
+					const legacy = this.db
+						.prepare(
+							"SELECT 1 FROM pragma_table_info(?) WHERE name = ? AND pk = 1"
+						)
+						.get(table, id)
+					if (legacy)
+						this.db.exec(`ALTER TABLE ${table} RENAME TO ${table}_legacy`)
+					this.db.exec(`CREATE TABLE IF NOT EXISTS ${table} (
+					${id} TEXT NOT NULL REFERENCES ${parent}(id) ON DELETE CASCADE,
+					vector BLOB NOT NULL, model TEXT NOT NULL
+				)`)
+					if (legacy) {
+						this.db.exec(`INSERT INTO ${table} (${id}, vector, model)
+						SELECT ${id}, vector, model FROM ${table}_legacy`)
+						this.db.exec(`DROP TABLE ${table}_legacy`)
+					}
+					this.db.exec(`
+					CREATE UNIQUE INDEX IF NOT EXISTS idx_${table}_space ON ${table}(${id}, model, length(vector))`)
+					this.db.exec(`
+					CREATE INDEX IF NOT EXISTS idx_${table}_model ON ${table}(model)`)
+					this.db.exec(`
+					CREATE TRIGGER IF NOT EXISTS invalidate_${table} AFTER UPDATE OF ${text} ON ${parent}
+					WHEN NEW.${text} IS NOT OLD.${text} BEGIN
+						DELETE FROM ${table} WHERE ${id} = NEW.id;
+					END;
+				`)
+				}
+			})
+			.immediate()
+	}
+
+	hasEmbeddingInputs(kind: "text" | "visual"): boolean {
+		const table = kind === "text" ? "memories" : "visual_memories"
+		return !!this.db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get()
 	}
 
 	private missingColumns(): string[] {
@@ -763,6 +821,24 @@ export class LucidStorage {
 		return this.getMemory(id)
 	}
 
+	reconsolidateMemory(
+		id: string,
+		content: string,
+		gist: string,
+		vector: number[],
+		model: string
+	): Memory | null {
+		return this.db
+			.transaction(() => {
+				const updated = this.updateMemory(id, { content, gist })
+				if (!updated) return null
+				this.updateConsolidationState(id, "reconsolidating")
+				this.storeEmbedding(id, vector, model, content)
+				return this.getMemory(id)
+			})
+			.immediate()
+	}
+
 	/**
 	 * Delete a memory and all its associations.
 	 */
@@ -879,25 +955,38 @@ export class LucidStorage {
 	/**
 	 * Store an embedding for a memory.
 	 */
-	storeEmbedding(memoryId: string, vector: number[], model: string): void {
+	storeEmbedding(
+		memoryId: string,
+		vector: number[],
+		model: string,
+		expectedContent?: string
+	): boolean {
 		const blob = new Uint8Array(new Float32Array(vector).buffer)
-
-		this.db
+		const guard =
+			expectedContent === undefined
+				? ""
+				: "WHERE EXISTS (SELECT 1 FROM memories WHERE id = ? AND content = ?)"
+		const args =
+			expectedContent === undefined ? [] : [memoryId, expectedContent]
+		const result = this.db
 			.prepare(`
-      INSERT OR REPLACE INTO embeddings (memory_id, vector, model) VALUES (?, ?, ?)
-    `)
-			.run(memoryId, blob, model)
+			INSERT OR REPLACE INTO embeddings (memory_id, vector, model)
+			SELECT ?, ?, ? ${guard}
+		`)
+			.run(memoryId, blob, model, ...args)
+		return result.changes > 0
 	}
 
 	/**
 	 * Get embedding for a memory.
 	 */
-	getEmbedding(memoryId: string): number[] | null {
+	getEmbedding(memoryId: string, space?: EmbeddingSpace): number[] | null {
+		const filter = embeddingFilter(space)
 		const row = this.db
 			.prepare(`
-      SELECT vector FROM embeddings WHERE memory_id = ?
+      SELECT vector FROM embeddings e WHERE memory_id = ? ${filter.sql} ORDER BY e.rowid DESC LIMIT 1
     `)
-			.get(memoryId) as { vector: Uint8Array } | null
+			.get(memoryId, ...filter.args) as { vector: Uint8Array } | null
 
 		if (!row) return null
 
@@ -914,12 +1003,13 @@ export class LucidStorage {
 	/**
 	 * Get all embeddings (for batch similarity operations).
 	 */
-	getAllEmbeddings(): Map<string, number[]> {
+	getAllEmbeddings(space?: EmbeddingSpace): Map<string, number[]> {
+		const filter = embeddingFilter(space)
 		const rows = this.db
 			.prepare(`
-      SELECT memory_id, vector FROM embeddings
+      SELECT memory_id, vector FROM embeddings e WHERE 1=1 ${filter.sql} ORDER BY e.rowid
     `)
-			.all() as { memory_id: string; vector: Uint8Array }[]
+			.all(...filter.args) as { memory_id: string; vector: Uint8Array }[]
 
 		const map = new Map<string, number[]>()
 		for (const row of rows) {
@@ -951,15 +1041,20 @@ export class LucidStorage {
 	/**
 	 * Get memories missing embeddings.
 	 */
-	getMemoriesWithoutEmbeddings(limit = 100): Memory[] {
+	getMemoriesWithoutEmbeddings(
+		limit = 100,
+		space?: EmbeddingSpace,
+		afterId = ""
+	): Memory[] {
+		const filter = embeddingFilter(space)
 		const rows = this.db
 			.prepare(`
       SELECT m.* FROM memories m
-      LEFT JOIN embeddings e ON m.id = e.memory_id
-      WHERE e.memory_id IS NULL
-      LIMIT ?
+      LEFT JOIN embeddings e ON m.id = e.memory_id ${filter.sql}
+      WHERE e.memory_id IS NULL AND m.id > ?
+      ORDER BY m.id LIMIT ?
     `)
-			.all(limit) as MemoryRow[]
+			.all(...filter.args, afterId, limit) as MemoryRow[]
 
 		return rows.map((r) => this.rowToMemory(r))
 	}
@@ -1206,7 +1301,8 @@ export class LucidStorage {
 	findMostSimilarMemory(
 		embedding: number[],
 		projectId?: string,
-		threshold = 0.4
+		threshold = 0.4,
+		space?: EmbeddingSpace
 	): {
 		memoryId: string
 		similarity: number
@@ -1217,6 +1313,7 @@ export class LucidStorage {
 	} | null {
 		// Get all embeddings + memory metadata
 		const condition = projectId ? "AND m.project_id = ?" : ""
+		const filter = embeddingFilter(space)
 		const values = projectId ? [projectId] : []
 
 		const rows = this.db
@@ -1224,9 +1321,9 @@ export class LucidStorage {
 				`SELECT e.memory_id, e.vector, m.created_at, m.encoding_strength, m.access_count
 				 FROM embeddings e
 				 JOIN memories m ON e.memory_id = m.id
-				 WHERE m.id NOT LIKE 'claude-response:%' ${condition}`
+				 WHERE m.id NOT LIKE 'claude-response:%' ${condition} ${filter.sql}`
 			)
-			.all(...values) as {
+			.all(...values, ...filter.args) as {
 			memory_id: string
 			vector: Uint8Array
 			created_at: number
@@ -2766,27 +2863,40 @@ export class LucidStorage {
 	storeVisualEmbedding(
 		visualMemoryId: string,
 		vector: number[],
-		model: string
-	): void {
+		model: string,
+		expectedDescription?: string
+	): boolean {
 		const blob = new Uint8Array(new Float32Array(vector).buffer)
-
-		this.db
+		const guard =
+			expectedDescription === undefined
+				? ""
+				: "WHERE EXISTS (SELECT 1 FROM visual_memories WHERE id = ? AND description = ?)"
+		const args =
+			expectedDescription === undefined
+				? []
+				: [visualMemoryId, expectedDescription]
+		const result = this.db
 			.prepare(`
-      INSERT OR REPLACE INTO visual_embeddings (visual_memory_id, vector, model)
-      VALUES (?, ?, ?)
-    `)
-			.run(visualMemoryId, blob, model)
+			INSERT OR REPLACE INTO visual_embeddings (visual_memory_id, vector, model)
+			SELECT ?, ?, ? ${guard}
+		`)
+			.run(visualMemoryId, blob, model, ...args)
+		return result.changes > 0
 	}
 
 	/**
 	 * Get embedding for a visual memory.
 	 */
-	getVisualEmbedding(visualMemoryId: string): number[] | null {
+	getVisualEmbedding(
+		visualMemoryId: string,
+		space?: EmbeddingSpace
+	): number[] | null {
+		const filter = embeddingFilter(space)
 		const row = this.db
 			.prepare(
-				`SELECT vector FROM visual_embeddings WHERE visual_memory_id = ?`
+				`SELECT vector FROM visual_embeddings e WHERE visual_memory_id = ? ${filter.sql} ORDER BY e.rowid DESC LIMIT 1`
 			)
-			.get(visualMemoryId) as { vector: Uint8Array } | null
+			.get(visualMemoryId, ...filter.args) as { vector: Uint8Array } | null
 
 		if (!row) return null
 
@@ -2803,10 +2913,13 @@ export class LucidStorage {
 	/**
 	 * Get all visual embeddings (for batch similarity operations).
 	 */
-	getAllVisualEmbeddings(): Map<string, number[]> {
+	getAllVisualEmbeddings(space?: EmbeddingSpace): Map<string, number[]> {
+		const filter = embeddingFilter(space)
 		const rows = this.db
-			.prepare(`SELECT visual_memory_id, vector FROM visual_embeddings`)
-			.all() as { visual_memory_id: string; vector: Uint8Array }[]
+			.prepare(
+				`SELECT visual_memory_id, vector FROM visual_embeddings e WHERE 1=1 ${filter.sql} ORDER BY e.rowid`
+			)
+			.all(...filter.args) as { visual_memory_id: string; vector: Uint8Array }[]
 
 		const map = new Map<string, number[]>()
 		for (const row of rows) {
@@ -2836,15 +2949,20 @@ export class LucidStorage {
 	/**
 	 * Get visual memories missing embeddings.
 	 */
-	getVisualMemoriesWithoutEmbeddings(limit = 100): VisualMemory[] {
+	getVisualMemoriesWithoutEmbeddings(
+		limit = 100,
+		space?: EmbeddingSpace,
+		afterId = ""
+	): VisualMemory[] {
+		const filter = embeddingFilter(space)
 		const rows = this.db
 			.prepare(`
       SELECT vm.* FROM visual_memories vm
-      LEFT JOIN visual_embeddings ve ON vm.id = ve.visual_memory_id
-      WHERE ve.visual_memory_id IS NULL
-      LIMIT ?
+      LEFT JOIN visual_embeddings e ON vm.id = e.visual_memory_id ${filter.sql}
+      WHERE e.visual_memory_id IS NULL AND vm.id > ?
+      ORDER BY vm.id LIMIT ?
     `)
-			.all(limit) as VisualMemoryRow[]
+			.all(...filter.args, afterId, limit) as VisualMemoryRow[]
 
 		return rows.map((r) => this.rowToVisualMemory(r))
 	}
@@ -2995,7 +3113,7 @@ export class LucidStorage {
 	/**
 	 * Get storage statistics.
 	 */
-	getStats(): {
+	getStats(space?: EmbeddingSpace): {
 		memoryCount: number
 		embeddingCount: number
 		associationCount: number
@@ -3006,13 +3124,18 @@ export class LucidStorage {
 		pendingVisualEmbeddingCount: number
 		dbSizeBytes: number
 	} {
+		const filter = embeddingFilter(space)
 		const memoryCount = (
 			this.db.prepare(`SELECT COUNT(*) as c FROM memories`).get() as {
 				c: number
 			}
 		).c
 		const embeddingCount = (
-			this.db.prepare(`SELECT COUNT(*) as c FROM embeddings`).get() as {
+			this.db
+				.prepare(
+					`SELECT COUNT(DISTINCT memory_id) as c FROM embeddings e WHERE 1=1 ${filter.sql}`
+				)
+				.get(...filter.args) as {
 				c: number
 			}
 		).c
@@ -3039,16 +3162,16 @@ export class LucidStorage {
 		const pendingEmbeddingCount = (
 			this.db
 				.prepare(
-					`SELECT COUNT(*) as c FROM memories m LEFT JOIN embeddings e ON m.id = e.memory_id WHERE e.memory_id IS NULL`
+					`SELECT COUNT(*) as c FROM memories m LEFT JOIN embeddings e ON m.id = e.memory_id ${filter.sql} WHERE e.memory_id IS NULL`
 				)
-				.get() as { c: number }
+				.get(...filter.args) as { c: number }
 		).c
 		const pendingVisualEmbeddingCount = (
 			this.db
 				.prepare(
-					`SELECT COUNT(*) as c FROM visual_memories vm LEFT JOIN visual_embeddings ve ON vm.id = ve.visual_memory_id WHERE ve.visual_memory_id IS NULL`
+					`SELECT COUNT(*) as c FROM visual_memories vm LEFT JOIN visual_embeddings e ON vm.id = e.visual_memory_id ${filter.sql} WHERE e.visual_memory_id IS NULL`
 				)
-				.get() as { c: number }
+				.get(...filter.args) as { c: number }
 		).c
 		const dbSizeBytes = (
 			this.db

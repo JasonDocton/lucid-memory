@@ -21,11 +21,7 @@ import { z } from "zod"
 import { ConsolidationConfig, ReconsolidationConfig } from "./config.ts"
 import { ConsolidationEngine } from "./consolidation.ts"
 import { LUCID_DIR, type LucidConfig, resolveDbPath } from "./database-path.ts"
-import {
-	detectProvider,
-	loadNativeEmbeddingModel,
-	type ProviderDiagnostics,
-} from "./embeddings.ts"
+import { detectProvider, type ProviderDiagnostics } from "./embeddings.ts"
 import { LucidRetrieval } from "./retrieval.ts"
 
 // === Multi-Client Configuration ===
@@ -106,19 +102,18 @@ function formatDiagnostics(d: ProviderDiagnostics): string {
  */
 async function initializeEmbeddings(): Promise<void> {
 	try {
-		// Pre-load native embedding model before detection
-		loadNativeEmbeddingModel()
-
 		const { config, diagnostics } = await detectProvider()
+		if (diagnostics.endpointError) {
+			console.error(
+				`[lucid] Custom endpoint skipped: ${diagnostics.endpointError}`
+			)
+		}
 		if (config) {
-			retrieval.setEmbeddingConfig(config)
+			retrieval.migrateEmbeddingsIfNeeded(config)
 			hasSemanticSearch = true
 			console.error(
 				`[lucid] Embedding provider: ${config.provider} (${config.model || "default"})`
 			)
-
-			// Migrate stale embeddings if model changed
-			retrieval.migrateEmbeddingsIfNeeded(config)
 		} else {
 			console.error(
 				"[lucid] ⚠️  No embedding provider found - using recency-only retrieval"
@@ -133,38 +128,25 @@ async function initializeEmbeddings(): Promise<void> {
 	}
 }
 
-/**
- * Process pending embeddings in the background.
- */
-function startBackgroundEmbeddingProcessor(): void {
+/** Keep a slow endpoint from accumulating overlapping batches of the same kind. */
+function startEmbeddingProcessor(
+	kind: string,
+	processBatch: () => Promise<number>
+): void {
+	let running = false
 	setInterval(async () => {
-		if (!hasSemanticSearch) return
+		if (!hasSemanticSearch || running) return
+		running = true
 		try {
-			const processed = await retrieval.processPendingEmbeddings(10)
-			if (processed > 0) {
-				console.error(`[lucid] Processed ${processed} pending embeddings`)
-			}
-		} catch (error) {
-			console.error("[lucid] Error processing embeddings:", error)
-		}
-	}, 5000)
-}
-
-/**
- * Process pending visual embeddings in the background.
- */
-function startBackgroundVisualEmbeddingProcessor(): void {
-	setInterval(async () => {
-		if (!hasSemanticSearch) return
-		try {
-			const processed = await retrieval.processPendingVisualEmbeddings(10)
-			if (processed > 0) {
+			const processed = await processBatch()
+			if (processed)
 				console.error(
-					`[lucid] Processed ${processed} pending visual embeddings`
+					`[lucid] Processed ${processed} pending ${kind} embeddings`
 				)
-			}
 		} catch (error) {
-			console.error("[lucid] Error processing visual embeddings:", error)
+			console.error(`[lucid] Error processing ${kind} embeddings:`, error)
+		} finally {
+			running = false
 		}
 	}, 5000)
 }
@@ -221,7 +203,10 @@ function startBackgroundConsolidationProcessor(): void {
 	// Full consolidation: every hour
 	setInterval(() => {
 		try {
-			const stats = engine.runFullConsolidation()
+			const stats = engine.runFullConsolidation(
+				undefined,
+				retrieval.getEmbeddingSpace()
+			)
 			const total =
 				stats.freshToConsolidating +
 				stats.consolidatingToConsolidated +
@@ -676,7 +661,7 @@ server.tool(
 	{},
 	async () => {
 		try {
-			const stats = retrieval.storage.getStats()
+			const stats = retrieval.storage.getStats(retrieval.getEmbeddingSpace())
 
 			return {
 				content: [
@@ -1170,8 +1155,10 @@ server.tool(
 			const associations = retrieval.storage.getAllAssociations()
 			const weakCount = associations.filter((a) => a.strength < 0.1).length
 			const recentEpisodes = retrieval.storage.getRecentEpisodes(undefined, 5)
-			const pendingEmbeddings =
-				retrieval.storage.getMemoriesWithoutEmbeddings(1000)
+			const pendingEmbeddings = retrieval.storage.getMemoriesWithoutEmbeddings(
+				1000,
+				retrieval.getEmbeddingSpace()
+			)
 			return {
 				content: [
 					{
@@ -2103,8 +2090,10 @@ async function main(): Promise<void> {
 	await initializeEmbeddings()
 
 	// Start background processors
-	startBackgroundEmbeddingProcessor()
-	startBackgroundVisualEmbeddingProcessor()
+	startEmbeddingProcessor("text", () => retrieval.processPendingEmbeddings(10))
+	startEmbeddingProcessor("visual", () =>
+		retrieval.processPendingVisualEmbeddings(10)
+	)
 	startBackgroundDecayProcessor()
 	startBackgroundConsolidationProcessor()
 	startBackgroundSessionPruneProcessor()

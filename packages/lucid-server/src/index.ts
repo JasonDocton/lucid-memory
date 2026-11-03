@@ -27,6 +27,7 @@ export type {
 	EmbeddingConfig,
 	EmbeddingProvider,
 	EmbeddingResult,
+	EmbeddingSpace,
 	ProviderDiagnostics,
 } from "./embeddings.ts"
 // Embeddings

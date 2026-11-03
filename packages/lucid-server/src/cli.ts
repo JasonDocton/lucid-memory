@@ -19,11 +19,7 @@ import {
 	type LucidConfig,
 	resolveDbPath,
 } from "./database-path.ts"
-import {
-	detectProvider,
-	loadNativeEmbeddingModel,
-	type ProviderDiagnostics,
-} from "./embeddings.ts"
+import { detectProvider } from "./embeddings.ts"
 import { LucidRetrieval } from "./retrieval.ts"
 import type { MemoryType } from "./storage.ts"
 
@@ -67,12 +63,9 @@ async function main() {
 
 	const retrieval = new LucidRetrieval({ dbPath })
 
-	// Pre-load native embedding model before detection
-	loadNativeEmbeddingModel()
-
 	// Try to set up embeddings
 	const { config: embeddingConfig, diagnostics: embeddingDiagnostics } =
-		await detectProvider()
+		await detectProvider(command === "context" ? 3000 : undefined)
 	if (embeddingConfig) {
 		retrieval.setEmbeddingConfig(embeddingConfig)
 	}
@@ -353,7 +346,8 @@ Examples:
 		}
 
 		case "status": {
-			const stats = retrieval.storage.getStats()
+			const space = retrieval.getEmbeddingSpace()
+			const stats = retrieval.storage.getStats(space)
 			const hasEmbeddings = embeddingConfig !== null
 			let embeddingStatus = "not configured"
 			let isEmbeddingHealthy = false
@@ -386,10 +380,15 @@ Examples:
 					embeddingStatus = embeddingDiagnostics.ollamaError ?? "not available"
 				}
 			} else if (embeddingConfig?.provider === "openai") {
-				embeddingStatus = embeddingConfig.openaiApiKey
-					? "ready (OpenAI API)"
-					: "no API key"
-				isEmbeddingHealthy = !!embeddingConfig.openaiApiKey
+				if (embeddingConfig.openaiBaseUrl) {
+					embeddingStatus = `ready (${new URL(embeddingConfig.openaiBaseUrl).origin})`
+					isEmbeddingHealthy = true
+				} else {
+					embeddingStatus = embeddingConfig.openaiApiKey
+						? "ready (OpenAI API)"
+						: "no API key"
+					isEmbeddingHealthy = !!embeddingConfig.openaiApiKey
+				}
 			}
 
 			// Database status
@@ -402,15 +401,25 @@ Examples:
 
 			// Embedding status
 			console.log("Embeddings:")
+			if (embeddingDiagnostics.endpointError) {
+				console.log(
+					`  Custom endpoint skipped: ${embeddingDiagnostics.endpointError}`
+				)
+			}
 			if (hasEmbeddings && embeddingConfig) {
 				console.log(`  Provider: ${embeddingConfig.provider}`)
-				console.log(`  Model: ${embeddingConfig.model || "bge-base-en-v1.5"}`)
+				console.log(`  Model: ${space?.model}`)
 				console.log(
 					`  Status: ${isEmbeddingHealthy ? "✓" : "✗"} ${embeddingStatus}`
 				)
 				const totalPending =
 					stats.pendingEmbeddingCount + stats.pendingVisualEmbeddingCount
-				if (totalPending > 0) {
+				if (
+					space?.dimensions === undefined &&
+					(stats.memoryCount || stats.visualMemoryCount)
+				) {
+					console.log("  Coverage: pending model width verification")
+				} else if (totalPending > 0) {
 					const parts: string[] = []
 					if (stats.pendingEmbeddingCount > 0)
 						parts.push(`${stats.pendingEmbeddingCount} text`)
