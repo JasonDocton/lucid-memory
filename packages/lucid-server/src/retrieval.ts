@@ -152,6 +152,8 @@ export class LucidRetrieval {
 	public readonly storage: LucidStorage
 	private embedder: EmbeddingClient | null = null
 	private didWarnNoEmbeddings = false
+	private textCursor = ""
+	private visualCursor = ""
 
 	// Working Memory Buffer (Phase 1: Temporal Retrieval)
 	// Tracks recently activated memories with exponential decay
@@ -233,6 +235,8 @@ export class LucidRetrieval {
 	 */
 	setEmbeddingConfig(config: EmbeddingConfig): void {
 		this.embedder = new EmbeddingClient(config)
+		this.textCursor = ""
+		this.visualCursor = ""
 	}
 
 	getEmbeddingSpace(): EmbeddingSpace | undefined {
@@ -603,10 +607,19 @@ export class LucidRetrieval {
 	 * Returns RetrievalResult with candidates, method used, and optional warning
 	 * so callers can surface degraded retrieval to users.
 	 */
-	async retrieve(
+	retrieve(
 		query: string,
 		options: Partial<RetrievalConfig> & { filterType?: Memory["type"] } = {},
 		projectId?: string
+	): Promise<RetrievalResult> {
+		return this.retrieveTextWithProbe(query, options, projectId)
+	}
+
+	private async retrieveTextWithProbe(
+		query: string,
+		options: Partial<RetrievalConfig> & { filterType?: Memory["type"] } = {},
+		projectId?: string,
+		queryProbe?: Promise<EmbeddingResult>
 	): Promise<RetrievalResult> {
 		const config = { ...DEFAULT_CONFIG, ...options }
 		const limit = config.maxResults ?? config.limit ?? 10
@@ -684,7 +697,7 @@ export class LucidRetrieval {
 		// Get probe embedding - fall back to recency if embedding fails
 		let probeResult: EmbeddingResult | undefined
 		try {
-			probeResult = await this.embedder.embed(query)
+			probeResult = await (queryProbe ?? this.embedder.embed(query))
 		} catch (error) {
 			const errMsg = error instanceof Error ? error.message : String(error)
 			console.error(
@@ -1265,20 +1278,13 @@ export class LucidRetrieval {
 					}
 
 					if (zone === "reconsolidate") {
-						this.storage.updateMemory(similar.memoryId, {
+						const updated = this.storage.reconsolidateMemory(
+							similar.memoryId,
 							content,
 							gist,
-						})
-						this.storage.updateConsolidationState(
-							similar.memoryId,
-							"reconsolidating"
-						)
-						this.storage.storeEmbedding(
-							similar.memoryId,
 							embedding.vector,
 							embedding.storageModel ?? embedding.model
 						)
-						const updated = this.storage.getMemory(similar.memoryId)
 						if (updated) return updated
 					}
 					// zone === "new_trace": fall through to normal store
@@ -1346,18 +1352,20 @@ export class LucidRetrieval {
 		if (this.embedder) {
 			try {
 				const embedding = await this.embedder.embed(content)
-				this.storage.storeEmbedding(
+				const stored = this.storage.storeEmbedding(
 					memory.id,
 					embedding.vector,
-					embedding.storageModel ?? embedding.model
+					embedding.storageModel ?? embedding.model,
+					content
 				)
 
 				// Auto-associate with recent similar memories
-				await this.createAutoAssociations(
-					memory.id,
-					embedding,
-					options.projectId
-				)
+				if (stored)
+					await this.createAutoAssociations(
+						memory.id,
+						embedding,
+						options.projectId
+					)
 			} catch (error) {
 				// Embedding failed, memory is still stored - will be processed later
 				console.error("[lucid] Embedding failed:", error)
@@ -1713,15 +1721,27 @@ export class LucidRetrieval {
 		if (!this.embedder) return 0
 
 		const embedder = this.embedder
+		if (
+			embedder.getSpace().dimensions === undefined &&
+			!this.storage.hasEmbeddingInputs("text")
+		)
+			return 0
 		let pending: Memory[]
-		let embeddings: EmbeddingResult[]
+		let embeddings: (EmbeddingResult | null)[]
 		try {
+			const space = await embedder.getVerifiedSpace()
 			pending = this.storage.getMemoriesWithoutEmbeddings(
 				batchSize,
-				await embedder.getVerifiedSpace()
+				space,
+				this.textCursor
 			)
+			if (!pending.length && this.textCursor) {
+				this.textCursor = ""
+				pending = this.storage.getMemoriesWithoutEmbeddings(batchSize, space)
+			}
 			if (!pending.length) return 0
-			embeddings = await embedder.embedBatch(
+			this.textCursor = pending[pending.length - 1]?.id ?? ""
+			embeddings = await embedder.embedPendingBatch(
 				pending.map((item) => item.content)
 			)
 		} catch (error) {
@@ -1729,18 +1749,22 @@ export class LucidRetrieval {
 			return 0
 		}
 
+		if (embedder !== this.embedder) return 0
+		let processed = 0
 		for (let i = 0; i < pending.length; i++) {
 			const memory = pending[i]
 			const embedding = embeddings[i]
 			if (!memory || !embedding) continue
-			this.storage.storeEmbedding(
+			const stored = this.storage.storeEmbedding(
 				memory.id,
 				embedding.vector,
-				embedding.storageModel ?? embedding.model
+				embedding.storageModel ?? embedding.model,
+				memory.content
 			)
+			if (stored) processed++
 		}
 
-		return pending.length
+		return processed
 	}
 
 	// ============================================================================
@@ -1755,10 +1779,19 @@ export class LucidRetrieval {
 	 * @param options - Retrieval configuration
 	 * @param projectId - Optional project ID for Phase 3 project context boost
 	 */
-	async retrieveVisual(
+	retrieveVisual(
 		query: string,
 		options: Partial<RetrievalConfig> = {},
 		projectId?: string
+	): Promise<VisualRetrievalCandidate[]> {
+		return this.retrieveVisualWithProbe(query, options, projectId)
+	}
+
+	private async retrieveVisualWithProbe(
+		query: string,
+		options: Partial<RetrievalConfig> = {},
+		projectId?: string,
+		queryProbe?: Promise<EmbeddingResult>
 	): Promise<VisualRetrievalCandidate[]> {
 		const config = { ...DEFAULT_CONFIG, ...options }
 		const limit = config.maxResults ?? config.limit ?? 10
@@ -1773,7 +1806,7 @@ export class LucidRetrieval {
 
 		let probeResult: EmbeddingResult | undefined
 		try {
-			probeResult = await this.embedder?.embed(query)
+			probeResult = await (queryProbe ?? this.embedder?.embed(query))
 		} catch (error) {
 			console.error("[lucid] Visual embedding failed, using recency:", error)
 		}
@@ -1985,7 +2018,8 @@ export class LucidRetrieval {
 				this.storage.storeVisualEmbedding(
 					visual.id,
 					embedding.vector,
-					embedding.storageModel ?? embedding.model
+					embedding.storageModel ?? embedding.model,
+					input.description
 				)
 			} catch (error) {
 				console.error("[lucid] Visual embedding failed:", error)
@@ -2002,15 +2036,30 @@ export class LucidRetrieval {
 		if (!this.embedder) return 0
 
 		const embedder = this.embedder
+		if (
+			embedder.getSpace().dimensions === undefined &&
+			!this.storage.hasEmbeddingInputs("visual")
+		)
+			return 0
 		let pending: VisualMemory[]
-		let embeddings: EmbeddingResult[]
+		let embeddings: (EmbeddingResult | null)[]
 		try {
+			const space = await embedder.getVerifiedSpace()
 			pending = this.storage.getVisualMemoriesWithoutEmbeddings(
 				batchSize,
-				await embedder.getVerifiedSpace()
+				space,
+				this.visualCursor
 			)
+			if (!pending.length && this.visualCursor) {
+				this.visualCursor = ""
+				pending = this.storage.getVisualMemoriesWithoutEmbeddings(
+					batchSize,
+					space
+				)
+			}
 			if (!pending.length) return 0
-			embeddings = await embedder.embedBatch(
+			this.visualCursor = pending[pending.length - 1]?.id ?? ""
+			embeddings = await embedder.embedPendingBatch(
 				pending.map((item) => item.description)
 			)
 		} catch (error) {
@@ -2018,18 +2067,22 @@ export class LucidRetrieval {
 			return 0
 		}
 
+		if (embedder !== this.embedder) return 0
+		let processed = 0
 		for (let i = 0; i < pending.length; i++) {
 			const visual = pending[i]
 			const embedding = embeddings[i]
 			if (!visual || !embedding) continue
-			this.storage.storeVisualEmbedding(
+			const stored = this.storage.storeVisualEmbedding(
 				visual.id,
 				embedding.vector,
-				embedding.storageModel ?? embedding.model
+				embedding.storageModel ?? embedding.model,
+				visual.description
 			)
+			if (stored) processed++
 		}
 
-		return pending.length
+		return processed
 	}
 
 	/**
@@ -2061,20 +2114,27 @@ export class LucidRetrieval {
 		const visualBudget = Math.floor(tokenBudget * visualRatio)
 		const textBudget = tokenBudget - visualBudget
 
+		const queryProbe = this.embedder?.embed(currentTask)
 		// Retrieve text memories
-		const { candidates: textCandidates } = await this.retrieve(
+		const { candidates: textCandidates } = await this.retrieveTextWithProbe(
 			currentTask,
 			{ maxResults: 10 },
-			projectId
+			projectId,
+			queryProbe
 		)
 		const relevantText = textCandidates.filter(
 			(c) => c.similarity >= minSimilarity
 		)
 
 		// Retrieve visual memories
-		const visualCandidates = await this.retrieveVisual(currentTask, {
-			maxResults: 5,
-		})
+		const visualCandidates = await this.retrieveVisualWithProbe(
+			currentTask,
+			{
+				maxResults: 5,
+			},
+			undefined,
+			queryProbe
+		)
 		const relevantVisual = visualCandidates.filter(
 			(c) => c.similarity >= minSimilarity
 		)

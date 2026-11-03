@@ -12,6 +12,7 @@ const config: EmbeddingConfig = {
 	provider: "openai",
 	openaiBaseUrl: base,
 	model: "shared-alias",
+	reportedModel: null,
 }
 const originalUrl = env.LUCID_EMBEDDING_URL
 const originalModel = env.LUCID_EMBEDDING_MODEL
@@ -160,7 +161,7 @@ it("shows the effective model in CLI status and never probes twice", () => {
 					databaseMode: "profiles", profiles: { default: { dbPath: ":memory:" } }
 				}) } : file(path, ...args)
 			globalThis.fetch = async (url) => {
-				console.log("STATUS_PROBE", String(url))
+				console.log("STATUS_PROBE", new URL(url).pathname)
 				return Response.json({ data: [{ index: 0, embedding: [1, 0] }] })
 			}
 			process.argv = [process.execPath, "cli.ts", "status"]
@@ -168,14 +169,15 @@ it("shows the effective model in CLI status and never probes twice", () => {
 		`,
 		],
 		cwd: import.meta.dir,
-		env: { ...env, LUCID_EMBEDDING_URL: base },
+		env: { ...env, LUCID_EMBEDDING_URL: `${base}?token=private-test-token` },
 	})
 	const output = child.stdout.toString()
 	expect(child.exitCode).toBe(0)
 	expect(output).toContain("Model: text-embedding-3-small")
 	expect(output).toContain("Status: ✓ ready")
 	expect(output.match(/STATUS_PROBE/g)).toHaveLength(1)
-	expect(output).toContain(`STATUS_PROBE ${base}/embeddings`)
+	expect(output).toContain("STATUS_PROBE /v1/embeddings")
+	expect(output).not.toContain("private-test-token")
 })
 
 it("preserves text and visual embeddings across URL-only restarts", async () => {
@@ -360,13 +362,23 @@ it("rejects incomplete or malformed batches before associating vectors with memo
 		expect(retrieval.storage.getEmbedding(a.id)).toBeNull()
 		expect(retrieval.storage.getEmbedding(b.id)).toBeNull()
 	}
-	fetchMock.mockResolvedValue(
-		Response.json({
-			data: [
-				{ index: 1, embedding: [0, 1] },
-				{ index: 0, embedding: [1, 0] },
-			],
-		})
+	fetchMock.mockImplementation(
+		Object.assign(
+			(_: Parameters<typeof fetch>[0], init?: RequestInit) => {
+				const input: string[] = JSON.parse(String(init?.body)).input
+				return Promise.resolve(
+					Response.json({
+						data: input
+							.map((text, index) => ({
+								index,
+								embedding: text === "a" ? [1, 0] : [0, 1],
+							}))
+							.reverse(),
+					})
+				)
+			},
+			{ preconnect: fetch.preconnect }
+		)
 	)
 	expect(await retrieval.processPendingEmbeddings()).toBe(2)
 	expect(retrieval.storage.getEmbedding(a.id)).toEqual([1, 0])
@@ -387,4 +399,207 @@ it("degrades both retrieval paths if the selected endpoint goes offline", async 
 	const results = await retrieval.retrieveVisual("query")
 	expect(results[0]?.visual.id).toBe(visual.id)
 	expect(results[0]?.similarity).toBe(0)
+})
+
+it("rejects an embedding that cannot be stored as a usable Float32 vector", async () => {
+	const client = new EmbeddingClient(config)
+	for (const embedding of [
+		[1e40, 1],
+		[0, 0],
+		[1e-100, -1e-100],
+	]) {
+		fetchMock.mockResolvedValue(
+			Response.json({ data: [{ index: 0, embedding }] })
+		)
+		expect(await client.isAvailable()).toBe(false)
+	}
+})
+
+it("does not overwrite a newer memory embedding with a late batch response", async () => {
+	retrieval.setEmbeddingConfig({ ...config, dimensions: 2 })
+	const memory = retrieval.storage.storeMemory({ content: "old text" })
+	const other = retrieval.storage.storeMemory({ content: "current text" })
+	const client = new EmbeddingClient({ ...config, dimensions: 2 })
+	const model = client.getSpace().storageModel
+	if (!model) throw new Error("Missing endpoint storage model")
+	fetchMock.mockImplementationOnce(
+		Object.assign(
+			() => {
+				retrieval.storage.updateMemory(memory.id, { content: "edited text" })
+				retrieval.storage.storeEmbedding(memory.id, [0, 1], model)
+				return Promise.resolve(vectors(["old text", "current text"], 2))
+			},
+			{ preconnect: fetch.preconnect }
+		)
+	)
+	expect(await retrieval.processPendingEmbeddings()).toBe(1)
+	expect(retrieval.storage.getEmbedding(memory.id)).toEqual([0, 1])
+	expect(retrieval.storage.getEmbedding(other.id)).toEqual([1, 0])
+})
+
+it("continues rebuilding other visuals if one was deleted during the request", async () => {
+	retrieval.setEmbeddingConfig({ ...config, dimensions: 2 })
+	const a = retrieval.storage.storeVisualMemory({
+		description: "removed",
+		mediaType: "image",
+		source: "direct",
+	})
+	const b = retrieval.storage.storeVisualMemory({
+		description: "retained",
+		mediaType: "image",
+		source: "direct",
+	})
+	fetchMock.mockImplementationOnce(
+		Object.assign(
+			() => {
+				retrieval.storage.deleteVisualMemory(a.id)
+				return Promise.resolve(vectors(["removed", "retained"], 2))
+			},
+			{ preconnect: fetch.preconnect }
+		)
+	)
+	expect(await retrieval.processPendingVisualEmbeddings()).toBe(1)
+	expect(retrieval.storage.getVisualEmbedding(a.id)).toBeNull()
+	expect(retrieval.storage.getVisualEmbedding(b.id)).toEqual([1, 0])
+})
+
+for (const provider of ["openai", "ollama"] as const) {
+	it(`learns the real width of the ${provider} fallback and rebuilds same-name incompatible rows`, async () => {
+		const model = "same-name"
+		const memory = retrieval.storage.storeMemory({ content: "legacy" })
+		const visual = retrieval.storage.storeVisualMemory({
+			description: "legacy",
+			mediaType: "image",
+			source: "direct",
+		})
+		retrieval.storage.storeEmbedding(memory.id, [1, 0, 0], model)
+		retrieval.storage.storeVisualEmbedding(visual.id, [1, 0, 0], model)
+		if (provider === "ollama")
+			fetchMock.mockImplementation(
+				Object.assign(
+					() => Promise.resolve(Response.json({ embedding: [1, 0] })),
+					{ preconnect: fetch.preconnect }
+				)
+			)
+		retrieval.setEmbeddingConfig({
+			provider,
+			model,
+			openaiApiKey: "synthetic-key",
+		})
+		expect(await retrieval.processPendingEmbeddings()).toBe(1)
+		expect(await retrieval.processPendingVisualEmbeddings()).toBe(1)
+		expect(retrieval.getEmbeddingSpace()?.dimensions).toBe(2)
+		expect(
+			retrieval.storage.getEmbedding(memory.id, retrieval.getEmbeddingSpace())
+		).toEqual([1, 0])
+		expect(
+			retrieval.storage.getVisualEmbedding(
+				visual.id,
+				retrieval.getEmbeddingSpace()
+			)
+		).toEqual([1, 0])
+		expect(await retrieval.processPendingEmbeddings()).toBe(0)
+		expect(await retrieval.processPendingVisualEmbeddings()).toBe(0)
+	})
+}
+
+it("requires a fresh detection when the endpoint reports a different model behind an alias", async () => {
+	env.LUCID_EMBEDDING_MODEL = "alias"
+	let reported = "encoder-A"
+	fetchMock.mockImplementation(
+		Object.assign(
+			(_: Parameters<typeof fetch>[0], init?: RequestInit) => {
+				const input: string[] = JSON.parse(String(init?.body)).input
+				return Promise.resolve(
+					Response.json({
+						model: reported,
+						data: input.map((_, index) => ({ index, embedding: [1, 0] })),
+					})
+				)
+			},
+			{ preconnect: fetch.preconnect }
+		)
+	)
+	const first = (await detectProvider()).config
+	if (!first) throw new Error("Expected working endpoint")
+	retrieval.migrateEmbeddingsIfNeeded(first)
+	const a = await retrieval.store("first")
+	const v = await retrieval.storeVisual({
+		description: "first visual",
+		mediaType: "image",
+		source: "direct",
+	})
+	reported = "encoder-B"
+	expect((await retrieval.retrieve("q")).method).toBe("recency")
+	const b = await retrieval.store("unrelated")
+	expect(b.id).not.toBe(a.id)
+	const second = (await detectProvider()).config
+	if (!second) throw new Error("Expected new model")
+	retrieval.migrateEmbeddingsIfNeeded(second)
+	expect((await retrieval.retrieve("q")).candidates).toHaveLength(0)
+	expect(await retrieval.retrieveVisual("q")).toHaveLength(0)
+	expect(await retrieval.processPendingEmbeddings()).toBe(2)
+	expect(await retrieval.processPendingVisualEmbeddings()).toBe(1)
+	expect((await retrieval.retrieveVisual("q"))[0]?.visual.id).toBe(v.id)
+})
+
+it("uses one query request for combined text and visual context", async () => {
+	retrieval.setEmbeddingConfig(config)
+	await retrieval.store("sailing")
+	await retrieval.storeVisual({
+		description: "sailing",
+		mediaType: "image",
+		source: "direct",
+	})
+	fetchMock.mockClear()
+	const result = await retrieval.getContextWithVisuals("sailing")
+	expect(fetchMock).toHaveBeenCalledTimes(1)
+	expect(result.memories).toHaveLength(1)
+	expect(result.visualMemories).toHaveLength(1)
+})
+
+it("a rejected input stays pending while later valid inputs rebuild", async () => {
+	retrieval.setEmbeddingConfig({ ...config, dimensions: 2 })
+	const bad = retrieval.storage.storeMemory({ content: "over limit" })
+	const good = Array.from({ length: 7 }, (_, i) =>
+		retrieval.storage.storeMemory({ content: `valid ${i}` })
+	)
+	fetchMock.mockImplementation(
+		Object.assign(
+			(_: Parameters<typeof fetch>[0], init?: RequestInit) => {
+				const input: string[] = JSON.parse(String(init?.body)).input
+				return Promise.resolve(
+					input.includes("over limit")
+						? new Response("too long", { status: 413 })
+						: vectors(input, 2)
+				)
+			},
+			{ preconnect: fetch.preconnect }
+		)
+	)
+	for (let i = 0; i < 8; i++) await retrieval.processPendingEmbeddings(2)
+	expect(retrieval.storage.getEmbedding(bad.id)).toBeNull()
+	for (const m of good)
+		expect(retrieval.storage.getEmbedding(m.id)).toEqual([1, 0])
+})
+
+it("keeps legacy localhost cache keys and separates custom Ollama hosts", async () => {
+	fetchMock.mockImplementation(
+		Object.assign(() => Promise.resolve(Response.json({ embedding: [1, 0] })), {
+			preconnect: fetch.preconnect,
+		})
+	)
+	const baseConfig = { provider: "ollama" as const, model: "shared" }
+	for (const ollamaHost of [undefined, "http://localhost:11434/"]) {
+		const client = new EmbeddingClient({ ...baseConfig, ollamaHost })
+		expect((await client.embed("probe")).storageModel).toBe("shared")
+	}
+	retrieval.setEmbeddingConfig({ ...baseConfig, ollamaHost: "http://one.test" })
+	const old = await retrieval.store("old text")
+	retrieval.setEmbeddingConfig({ ...baseConfig, ollamaHost: "http://two.test" })
+	const fresh = await retrieval.store("unrelated")
+	expect(fresh.id).not.toBe(old.id)
+	expect(
+		(await retrieval.retrieve("query")).candidates.map((item) => item.memory.id)
+	).toEqual([fresh.id])
 })

@@ -174,38 +174,25 @@ async function initializeEmbeddings(): Promise<void> {
 	}
 }
 
-/**
- * Process pending embeddings in the background.
- */
-function startBackgroundEmbeddingProcessor(): void {
+/** Keep a slow endpoint from accumulating overlapping batches of the same kind. */
+function startEmbeddingProcessor(
+	kind: string,
+	processBatch: () => Promise<number>
+): void {
+	let running = false
 	setInterval(async () => {
-		if (!hasSemanticSearch) return
+		if (!hasSemanticSearch || running) return
+		running = true
 		try {
-			const processed = await retrieval.processPendingEmbeddings(10)
-			if (processed > 0) {
-				console.error(`[lucid] Processed ${processed} pending embeddings`)
-			}
-		} catch (error) {
-			console.error("[lucid] Error processing embeddings:", error)
-		}
-	}, 5000)
-}
-
-/**
- * Process pending visual embeddings in the background.
- */
-function startBackgroundVisualEmbeddingProcessor(): void {
-	setInterval(async () => {
-		if (!hasSemanticSearch) return
-		try {
-			const processed = await retrieval.processPendingVisualEmbeddings(10)
-			if (processed > 0) {
+			const processed = await processBatch()
+			if (processed)
 				console.error(
-					`[lucid] Processed ${processed} pending visual embeddings`
+					`[lucid] Processed ${processed} pending ${kind} embeddings`
 				)
-			}
 		} catch (error) {
-			console.error("[lucid] Error processing visual embeddings:", error)
+			console.error(`[lucid] Error processing ${kind} embeddings:`, error)
+		} finally {
+			running = false
 		}
 	}, 5000)
 }
@@ -2149,8 +2136,10 @@ async function main(): Promise<void> {
 	await initializeEmbeddings()
 
 	// Start background processors
-	startBackgroundEmbeddingProcessor()
-	startBackgroundVisualEmbeddingProcessor()
+	startEmbeddingProcessor("text", () => retrieval.processPendingEmbeddings(10))
+	startEmbeddingProcessor("visual", () =>
+		retrieval.processPendingVisualEmbeddings(10)
+	)
 	startBackgroundDecayProcessor()
 	startBackgroundConsolidationProcessor()
 	startBackgroundSessionPruneProcessor()

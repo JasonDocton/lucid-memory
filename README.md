@@ -238,7 +238,9 @@ lucid status
 
 Use the server’s API base URL. Lucid appends `/embeddings` and tests the selected model with a short text. If the request fails, Lucid tries native BGE, then OpenAI if `OPENAI_API_KEY` is set, then legacy Ollama. With no usable provider, retrieval uses recency. If you omit `LUCID_EMBEDDING_MODEL`, the endpoint must serve `text-embedding-3-small`. The custom endpoint does not receive your environment’s OpenAI API key.
 
-Changing the endpoint, model, or vector width makes old vectors pending for the background worker. Memories stay in the database while compatible vectors are rebuilt. Use the same embedding configuration for clients sharing a database. If you replace a model behind an existing alias with one of the same width, give the replacement a new model name so Lucid can recognize the change.
+Lucid caches each endpoint, model identity, and vector width separately. Clients sharing a database can reuse compatible vectors, including after an outage or a switch back to an earlier model. Editing a memory invalidates its cached vectors across all models. On first use, Lucid upgrades existing text and visual indexes together and preserves their vectors. Update clients sharing that database together.
+
+Restart Lucid after changing a serving model. When the endpoint reports a different model behind an alias, Lucid rejects the change until restart. If the endpoint serves different weights under the same reported name and width, use a new model name so Lucid can distinguish them.
 
 <details>
 <summary><b>Multi-client configuration</b></summary>

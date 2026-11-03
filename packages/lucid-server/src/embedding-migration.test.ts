@@ -458,7 +458,7 @@ describe("Embedding Migration", () => {
 			expect(storage.countEmbeddingsNotMatching("bge-base-en-v1.5")).toBe(0)
 		})
 
-		it("re-embedding overwrites old embedding", () => {
+		it("keeps each model cache and returns the latest unscoped embedding", () => {
 			const m1 = storage.storeMemory({ content: "Memory 1" })
 
 			// First embedding (Ollama)
@@ -466,12 +466,12 @@ describe("Embedding Migration", () => {
 			const old = storage.getEmbedding(m1.id)
 			expect(old?.length).toBe(3)
 
-			// Overwrite with BGE (different dimension)
+			// Add BGE (different dimension)
 			storage.storeEmbedding(m1.id, [0.4, 0.5, 0.6, 0.7], "bge-base-en-v1.5")
 			const updated = storage.getEmbedding(m1.id)
 			expect(updated?.length).toBe(4)
 
-			expect(storage.countEmbeddingsNotMatching("bge-base-en-v1.5")).toBe(0)
+			expect(storage.countEmbeddingsNotMatching("bge-base-en-v1.5")).toBe(1)
 		})
 
 		it("handles model names with special characters", () => {

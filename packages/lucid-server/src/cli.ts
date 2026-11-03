@@ -422,7 +422,7 @@ Examples:
 				}
 			} else if (embeddingConfig?.provider === "openai") {
 				if (embeddingConfig.openaiBaseUrl) {
-					embeddingStatus = `ready (${embeddingConfig.openaiBaseUrl})`
+					embeddingStatus = `ready (${new URL(embeddingConfig.openaiBaseUrl).origin})`
 					isEmbeddingHealthy = true
 				} else {
 					embeddingStatus = embeddingConfig.openaiApiKey
@@ -455,7 +455,12 @@ Examples:
 				)
 				const totalPending =
 					stats.pendingEmbeddingCount + stats.pendingVisualEmbeddingCount
-				if (totalPending > 0) {
+				if (
+					space?.dimensions === undefined &&
+					(stats.memoryCount || stats.visualMemoryCount)
+				) {
+					console.log("  Coverage: pending model width verification")
+				} else if (totalPending > 0) {
 					const parts: string[] = []
 					if (stats.pendingEmbeddingCount > 0)
 						parts.push(`${stats.pendingEmbeddingCount} text`)

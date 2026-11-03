@@ -94,12 +94,14 @@ export interface EmbeddingConfig {
 	ollamaHost?: string
 	openaiApiKey?: string
 	openaiBaseUrl?: string
+	reportedModel?: string | null
 	dimensions?: number
 }
 
 export interface EmbeddingSpace {
 	model: string
 	storageModel?: string
+	reportedModel?: string | null
 	dimensions?: number
 }
 
@@ -200,11 +202,13 @@ export function isNativeEmbeddingAvailable(): boolean {
 	}
 }
 
-/**
- * Embedding client for generating vectors from text.
- */
+class RejectedEmbeddingInput extends Error {}
+
+/** Embedding client for generating vectors from text. */
+
 export class EmbeddingClient {
 	private config: EmbeddingConfig
+	private spaceProbe?: Promise<EmbeddingResult>
 
 	constructor(config: EmbeddingConfig) {
 		this.config = { ...config }
@@ -242,6 +246,28 @@ export class EmbeddingClient {
 		return results
 	}
 
+	async embedPendingBatch(
+		texts: string[]
+	): Promise<(EmbeddingResult | null)[]> {
+		try {
+			return await this.embedBatch(texts)
+		} catch (error) {
+			if (!(error instanceof RejectedEmbeddingInput) || texts.length < 2)
+				throw error
+		}
+		// A single over-limit input must not prevent its neighbors from rebuilding.
+		const results: (EmbeddingResult | null)[] = []
+		for (const text of texts) {
+			try {
+				results.push(await this.embed(text))
+			} catch (error) {
+				if (!(error instanceof RejectedEmbeddingInput)) throw error
+				results.push(null)
+			}
+		}
+		return results
+	}
+
 	/**
 	 * Check if the embedding provider is available.
 	 */
@@ -251,8 +277,9 @@ export class EmbeddingClient {
 				return nativeEmbedding?.isEmbeddingModelLoaded() ?? false
 			}
 			if (this.config.provider === "ollama") {
-				const host = this.config.ollamaHost ?? defaultOllamaHost
-				const response = await fetch(`${host}/api/tags`)
+				const response = await fetch(this.endpointUrl("api/tags"), {
+					signal: AbortSignal.timeout(endpointTimeoutMs),
+				})
 				return response.ok
 			}
 			if (this.config.openaiBaseUrl) {
@@ -278,14 +305,18 @@ export class EmbeddingClient {
 		return this.config.model ?? defaultOpenaiModel
 	}
 
-	private embeddingsUrl(): string {
-		const url = new URL(
-			this.config.openaiBaseUrl ?? "https://api.openai.com/v1"
-		)
+	private endpointUrl(
+		route = this.config.provider === "ollama" ? "api/embeddings" : "embeddings"
+	): string {
+		const base =
+			this.config.provider === "ollama"
+				? (this.config.ollamaHost ?? defaultOllamaHost)
+				: (this.config.openaiBaseUrl ?? "https://api.openai.com/v1")
+		const url = new URL(base)
 		if (url.protocol !== "http:" && url.protocol !== "https:") {
 			throw new Error("The embedding endpoint requires an HTTP or HTTPS URL")
 		}
-		url.pathname = `${url.pathname.replace(trailingSlashes, "")}/embeddings`
+		url.pathname = `${url.pathname.replace(trailingSlashes, "")}/${route}`
 		url.hash = ""
 		return url.href
 	}
@@ -294,13 +325,23 @@ export class EmbeddingClient {
 	// endpoints that use the same alias for different embedding spaces.
 	getSpace(): EmbeddingSpace {
 		const model = this.getModel()
-		const url = this.config.openaiBaseUrl
-		const storageModel = url
-			? `endpoint:${createHash("sha256").update(this.embeddingsUrl()).digest("hex")}:${model}`
-			: model
+		const reportedModel = this.config.reportedModel
+		let storageModel = model
+		if (this.config.openaiBaseUrl || this.config.ollamaHost) {
+			const url = this.endpointUrl()
+			// Preserve existing cache keys for default localhost Ollama.
+			if (
+				this.config.provider !== "ollama" ||
+				url !== `${defaultOllamaHost}/api/embeddings`
+			) {
+				const key = JSON.stringify([url, model, reportedModel ?? null])
+				storageModel = `endpoint:${createHash("sha256").update(key).digest("hex")}:${model}`
+			}
+		}
 		return {
 			model,
 			storageModel,
+			reportedModel,
 			dimensions:
 				this.config.dimensions ??
 				(this.config.provider === "native" ? 768 : undefined),
@@ -308,14 +349,23 @@ export class EmbeddingClient {
 	}
 
 	async getVerifiedSpace(timeout = endpointTimeoutMs): Promise<EmbeddingSpace> {
-		if (this.config.openaiBaseUrl && this.config.dimensions === undefined) {
-			await this.probeEndpoint(timeout)
+		const space = this.getSpace()
+		if (
+			space.dimensions === undefined ||
+			(this.config.openaiBaseUrl && space.reportedModel === undefined)
+		) {
+			this.spaceProbe ??= this.probeEndpoint(timeout).finally(() => {
+				this.spaceProbe = undefined
+			})
+			await this.spaceProbe
 		}
 		return this.getSpace()
 	}
 
 	private probeEndpoint(timeout = endpointTimeoutMs): Promise<EmbeddingResult> {
-		return this.embedOpenAI("Lucid embedding availability check", timeout)
+		return this.config.provider === "ollama"
+			? this.embedOllama("Lucid embedding availability check")
+			: this.embedOpenAI("Lucid embedding availability check", timeout)
 	}
 
 	// ============================================================================
@@ -353,12 +403,11 @@ export class EmbeddingClient {
 	// ============================================================================
 
 	private async embedOllama(text: string): Promise<EmbeddingResult> {
-		const host = this.config.ollamaHost ?? defaultOllamaHost
 		const model = this.config.model ?? defaultOllamaModel
 
 		let response: Response
 		try {
-			response = await fetch(`${host}/api/embeddings`, {
+			response = await fetch(this.endpointUrl(), {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ model, prompt: text }),
@@ -392,10 +441,12 @@ export class EmbeddingClient {
 		}
 
 		const data = (await response.json()) as { embedding: number[] }
-
+		if (!usableVector(data.embedding, this.config.dimensions))
+			throw new Error("Invalid Ollama embedding")
+		this.config.dimensions = data.embedding.length
 		return {
+			...this.getSpace(),
 			vector: data.embedding,
-			model,
 			dimensions: data.embedding.length,
 		}
 	}
@@ -426,7 +477,7 @@ export class EmbeddingClient {
 			throw new Error("OpenAI API key required")
 		}
 
-		const space = this.getSpace()
+		const model = this.getModel()
 		const headers: Record<string, string> = {
 			"Content-Type": "application/json",
 		}
@@ -434,24 +485,26 @@ export class EmbeddingClient {
 			headers.Authorization = `Bearer ${apiKey}`
 		}
 
-		const response = await fetch(this.embeddingsUrl(), {
+		const response = await fetch(this.endpointUrl(), {
 			method: "POST",
 			headers,
-			signal: this.config.openaiBaseUrl
-				? AbortSignal.timeout(timeout)
-				: undefined,
+			signal: AbortSignal.timeout(timeout),
 			body: JSON.stringify({
-				model: space.model,
+				model,
 				input: texts,
 			}),
 		})
 
 		if (!response.ok) {
 			const error = await response.text()
-			throw new Error(`OpenAI embedding failed: ${error}`)
+			const message = `OpenAI embedding failed: ${error}`
+			if ([400, 413, 422].includes(response.status))
+				throw new RejectedEmbeddingInput(message)
+			throw new Error(message)
 		}
 
 		const data = (await response.json()) as {
+			model?: unknown
 			data: { embedding: number[]; index: number }[]
 		}
 
@@ -460,23 +513,56 @@ export class EmbeddingClient {
 		}
 		const sorted = data.data.sort((a, b) => a.index - b.index)
 		const dimensions = this.config.dimensions ?? sorted[0]?.embedding?.length
-		const results = sorted.map((item, index) => {
-			const vector = item.embedding
+		if (
+			sorted.some(
+				(item, index) =>
+					item.index !== index || !usableVector(item.embedding, dimensions)
+			)
+		) {
+			throw new Error("Invalid embedding index, dimensions, or values")
+		}
+		if (this.config.openaiBaseUrl) {
+			const reported = data.model ?? null
 			if (
-				item.index !== index ||
-				!Array.isArray(vector) ||
-				!dimensions ||
-				vector.length !== dimensions ||
-				!vector.every(Number.isFinite)
+				reported !== null &&
+				(typeof reported !== "string" || !reported.trim())
 			) {
-				throw new Error("Invalid embedding index, dimensions, or values")
+				throw new Error("Invalid embedding model identity")
 			}
-			return { ...space, vector, dimensions }
-		})
-		if (this.config.openaiBaseUrl && results.length)
-			this.config.dimensions = dimensions
-		return results
+			if (
+				this.config.reportedModel !== undefined &&
+				reported !== this.config.reportedModel
+			) {
+				throw new Error(
+					"The endpoint changed its embedding model. Restart Lucid to switch models."
+				)
+			}
+			this.config.reportedModel = reported
+		}
+		if (sorted.length) this.config.dimensions = dimensions
+		const space = this.getSpace()
+		return sorted.map(({ embedding }) => ({
+			...space,
+			vector: embedding,
+			dimensions: embedding.length,
+		}))
 	}
+}
+
+function usableVector(
+	vector: unknown,
+	dimensions?: number
+): vector is number[] {
+	// SQLite stores Float32; reject values that overflow or all round to zero.
+	return (
+		Array.isArray(vector) &&
+		vector.length > 0 &&
+		(dimensions === undefined || vector.length === dimensions) &&
+		vector.every(
+			(v) => typeof v === "number" && Number.isFinite(Math.fround(v))
+		) &&
+		vector.some((v) => Math.fround(v) !== 0)
+	)
 }
 
 /**
@@ -507,10 +593,13 @@ export async function detectProvider(
 				openaiBaseUrl: embeddingUrl,
 				model,
 			}
-			const { dimensions } = await new EmbeddingClient(
+			const { dimensions, reportedModel } = await new EmbeddingClient(
 				candidate
 			).getVerifiedSpace(probeTimeoutMs)
-			return { config: { ...candidate, dimensions }, diagnostics }
+			return {
+				config: { ...candidate, dimensions, reportedModel },
+				diagnostics,
+			}
 		} catch (error) {
 			diagnostics.endpointError =
 				error instanceof Error ? error.message : String(error)
