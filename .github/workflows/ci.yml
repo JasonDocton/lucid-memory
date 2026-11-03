@@ -11,6 +11,20 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
+  server-tests:
+    name: Server tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd packages/lucid-server typecheck
+      - run: bun test packages/lucid-server/src
+
   test:
     name: Test
     runs-on: ubuntu-latest

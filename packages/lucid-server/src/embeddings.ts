@@ -2,9 +2,10 @@
  * Embedding Pipeline
  *
  * Converts text to vectors for semantic search.
- * Supports native in-process ONNX (BGE-base-en-v1.5), Ollama (legacy), and OpenAI (cloud).
+ * Supports native BGE, OpenAI-compatible endpoints, OpenAI, and legacy Ollama.
  */
 
+import { createHash } from "node:crypto"
 import {
 	appendFileSync,
 	existsSync,
@@ -92,11 +93,18 @@ export interface EmbeddingConfig {
 	model?: string
 	ollamaHost?: string
 	openaiApiKey?: string
+	openaiBaseUrl?: string
+	dimensions?: number
 }
 
-export interface EmbeddingResult {
-	vector: number[]
+export interface EmbeddingSpace {
 	model: string
+	storageModel?: string
+	dimensions?: number
+}
+
+export interface EmbeddingResult extends EmbeddingSpace {
+	vector: number[]
 	dimensions: number
 }
 
@@ -110,6 +118,7 @@ export interface ProviderDiagnostics {
 	ollamaStatus?: "connected" | "no_model" | "timeout" | "refused" | "error"
 	ollamaError?: string
 	openaiAvailable: boolean
+	endpointError?: string
 }
 
 export interface DetectProviderResult {
@@ -119,6 +128,8 @@ export interface DetectProviderResult {
 
 const defaultOllamaHost = "http://localhost:11434"
 const defaultOllamaModel = "nomic-embed-text"
+const endpointTimeoutMs = 30_000
+const trailingSlashes = /\/+$/
 const defaultOpenaiModel = "text-embedding-3-small"
 
 // Native embedding module (loaded with try/catch)
@@ -196,7 +207,7 @@ export class EmbeddingClient {
 	private config: EmbeddingConfig
 
 	constructor(config: EmbeddingConfig) {
-		this.config = config
+		this.config = { ...config }
 	}
 
 	/**
@@ -244,7 +255,10 @@ export class EmbeddingClient {
 				const response = await fetch(`${host}/api/tags`)
 				return response.ok
 			}
-			// OpenAI: just check if API key exists
+			if (this.config.openaiBaseUrl) {
+				await this.probeEndpoint()
+				return true
+			}
 			return !!this.config.openaiApiKey
 		} catch {
 			return false
@@ -262,6 +276,46 @@ export class EmbeddingClient {
 			return this.config.model ?? defaultOllamaModel
 		}
 		return this.config.model ?? defaultOpenaiModel
+	}
+
+	private embeddingsUrl(): string {
+		const url = new URL(
+			this.config.openaiBaseUrl ?? "https://api.openai.com/v1"
+		)
+		if (url.protocol !== "http:" && url.protocol !== "https:") {
+			throw new Error("The embedding endpoint requires an HTTP or HTTPS URL")
+		}
+		url.pathname = `${url.pathname.replace(trailingSlashes, "")}/embeddings`
+		url.hash = ""
+		return url.href
+	}
+
+	// The model name is sent on the wire. The cache also distinguishes local
+	// endpoints that use the same alias for different embedding spaces.
+	getSpace(): EmbeddingSpace {
+		const model = this.getModel()
+		const url = this.config.openaiBaseUrl
+		const storageModel = url
+			? `endpoint:${createHash("sha256").update(this.embeddingsUrl()).digest("hex")}:${model}`
+			: model
+		return {
+			model,
+			storageModel,
+			dimensions:
+				this.config.dimensions ??
+				(this.config.provider === "native" ? 768 : undefined),
+		}
+	}
+
+	async getVerifiedSpace(timeout = endpointTimeoutMs): Promise<EmbeddingSpace> {
+		if (this.config.openaiBaseUrl && this.config.dimensions === undefined) {
+			await this.probeEndpoint(timeout)
+		}
+		return this.getSpace()
+	}
+
+	private probeEndpoint(timeout = endpointTimeoutMs): Promise<EmbeddingResult> {
+		return this.embedOpenAI("Lucid embedding availability check", timeout)
 	}
 
 	// ============================================================================
@@ -350,8 +404,11 @@ export class EmbeddingClient {
 	// OpenAI Implementation
 	// ============================================================================
 
-	private async embedOpenAI(text: string): Promise<EmbeddingResult> {
-		const results = await this.embedOpenAIBatch([text])
+	private async embedOpenAI(
+		text: string,
+		timeout = endpointTimeoutMs
+	): Promise<EmbeddingResult> {
+		const results = await this.embedOpenAIBatch([text], timeout)
 		const result = results[0]
 		if (!result) {
 			throw new Error("No embedding result returned")
@@ -359,22 +416,32 @@ export class EmbeddingClient {
 		return result
 	}
 
-	private async embedOpenAIBatch(texts: string[]): Promise<EmbeddingResult[]> {
+	private async embedOpenAIBatch(
+		texts: string[],
+		timeout = endpointTimeoutMs
+	): Promise<EmbeddingResult[]> {
 		const apiKey = this.config.openaiApiKey
-		if (!apiKey) {
+
+		if (!apiKey && !this.config.openaiBaseUrl) {
 			throw new Error("OpenAI API key required")
 		}
 
-		const model = this.config.model ?? defaultOpenaiModel
+		const space = this.getSpace()
+		const headers: Record<string, string> = {
+			"Content-Type": "application/json",
+		}
+		if (apiKey) {
+			headers.Authorization = `Bearer ${apiKey}`
+		}
 
-		const response = await fetch("https://api.openai.com/v1/embeddings", {
+		const response = await fetch(this.embeddingsUrl(), {
 			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${apiKey}`,
-			},
+			headers,
+			signal: this.config.openaiBaseUrl
+				? AbortSignal.timeout(timeout)
+				: undefined,
 			body: JSON.stringify({
-				model,
+				model: space.model,
 				input: texts,
 			}),
 		})
@@ -388,29 +455,66 @@ export class EmbeddingClient {
 			data: { embedding: number[]; index: number }[]
 		}
 
-		// Sort by index to maintain order
+		if (!Array.isArray(data.data) || data.data.length !== texts.length) {
+			throw new Error("Incomplete embedding batch")
+		}
 		const sorted = data.data.sort((a, b) => a.index - b.index)
-
-		return sorted.map((item) => ({
-			vector: item.embedding,
-			model,
-			dimensions: item.embedding.length,
-		}))
+		const dimensions = this.config.dimensions ?? sorted[0]?.embedding?.length
+		const results = sorted.map((item, index) => {
+			const vector = item.embedding
+			if (
+				item.index !== index ||
+				!Array.isArray(vector) ||
+				!dimensions ||
+				vector.length !== dimensions ||
+				!vector.every(Number.isFinite)
+			) {
+				throw new Error("Invalid embedding index, dimensions, or values")
+			}
+			return { ...space, vector, dimensions }
+		})
+		if (this.config.openaiBaseUrl && results.length)
+			this.config.dimensions = dimensions
+		return results
 	}
 }
 
 /**
  * Auto-detect the best available embedding provider.
  *
- * Priority: native → OpenAI (env var) → Ollama (legacy) → null
+ * Priority: configured endpoint → native → OpenAI (env var) → Ollama (legacy) → null
  *
  * Returns both the config and diagnostics so callers can report
  * exactly why each provider was skipped.
  */
-export async function detectProvider(): Promise<DetectProviderResult> {
+export async function detectProvider(
+	probeTimeoutMs = endpointTimeoutMs
+): Promise<DetectProviderResult> {
 	const diagnostics: ProviderDiagnostics = {
 		nativeStatus: "module_unavailable",
 		openaiAvailable: false,
+	}
+
+	// 0. Explicit local embedding endpoint (LM Studio, Ollama OpenAI-compat, vLLM, etc.)
+	// biome-ignore lint/style/noProcessEnv: Config detection requires environment access
+	const embeddingUrl = process.env.LUCID_EMBEDDING_URL
+	if (embeddingUrl) {
+		// biome-ignore lint/style/noProcessEnv: Config detection requires environment access
+		const model = process.env.LUCID_EMBEDDING_MODEL || defaultOpenaiModel
+		try {
+			const candidate: EmbeddingConfig = {
+				provider: "openai",
+				openaiBaseUrl: embeddingUrl,
+				model,
+			}
+			const { dimensions } = await new EmbeddingClient(
+				candidate
+			).getVerifiedSpace(probeTimeoutMs)
+			return { config: { ...candidate, dimensions }, diagnostics }
+		} catch (error) {
+			diagnostics.endpointError =
+				error instanceof Error ? error.message : String(error)
+		}
 	}
 
 	// 1. Try native in-process embeddings (zero deps, best UX)
@@ -444,7 +548,11 @@ export async function detectProvider(): Promise<DetectProviderResult> {
 	diagnostics.openaiAvailable = !!openaiKey
 	if (openaiKey) {
 		return {
-			config: { provider: "openai", openaiApiKey: openaiKey },
+			config: {
+				provider: "openai",
+				model: defaultOpenaiModel,
+				openaiApiKey: openaiKey,
+			},
 			diagnostics,
 		}
 	}

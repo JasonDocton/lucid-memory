@@ -226,6 +226,20 @@ That's it. Your AI coding assistant now remembers across sessions.
 
 </details>
 
+### Use a local embedding endpoint
+
+To use a model served by Ollama or another OpenAI-compatible server, set the following variables in the environment that launches the Lucid MCP server and CLI. For example, with Ollama serving `bge-m3`:
+
+```sh
+export LUCID_EMBEDDING_URL=http://127.0.0.1:11434/v1
+export LUCID_EMBEDDING_MODEL=bge-m3
+lucid status
+```
+
+Use the server’s API base URL. Lucid appends `/embeddings` and tests the selected model with a short text. If the request fails, Lucid tries native BGE, then OpenAI if `OPENAI_API_KEY` is set, then legacy Ollama. With no usable provider, retrieval uses recency. If you omit `LUCID_EMBEDDING_MODEL`, the endpoint must serve `text-embedding-3-small`. The custom endpoint does not receive your environment’s OpenAI API key.
+
+Changing the endpoint, model, or vector width makes old vectors pending for the background worker. Memories stay in the database while compatible vectors are rebuilt. Use the same embedding configuration for clients sharing a database. If you replace a model behind an existing alias with one of the same width, give the replacement a new model name so Lucid can recognize the change.
+
 <details>
 <summary><b>Multi-client configuration</b></summary>
 

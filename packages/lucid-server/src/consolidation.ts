@@ -11,6 +11,7 @@
  */
 
 import { AssociationDecayConfig, ConsolidationConfig } from "./config.ts"
+import type { EmbeddingSpace } from "./embeddings.ts"
 import type { ConsolidationState, LucidStorage } from "./storage.ts"
 
 // Try to load native Rust bindings
@@ -119,7 +120,10 @@ export class ConsolidationEngine {
 		return stats
 	}
 
-	runFullConsolidation(maxMemoryCount = 50000): FullConsolidationStats {
+	runFullConsolidation(
+		maxMemoryCount = 50000,
+		space?: EmbeddingSpace
+	): FullConsolidationStats {
 		const stats: FullConsolidationStats = {
 			freshToConsolidating: 0,
 			consolidatingToConsolidated: 0,
@@ -187,7 +191,7 @@ export class ConsolidationEngine {
 			const now = Date.now()
 			const oneDayMs = 24 * 60 * 60 * 1000
 			for (const v of visuals) {
-				const hasEmbed = this.storage.getVisualEmbedding(v.id) !== null
+				const hasEmbed = this.storage.getVisualEmbedding(v.id, space) !== null
 				if (!hasEmbed) continue // still being processed, don't prune yet
 				const daysSinceAccess =
 					(now - (v.lastAccessed ?? v.createdAt)) / oneDayMs

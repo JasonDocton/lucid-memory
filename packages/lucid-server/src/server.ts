@@ -20,11 +20,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
 import { ConsolidationConfig, ReconsolidationConfig } from "./config.ts"
 import { ConsolidationEngine } from "./consolidation.ts"
-import {
-	detectProvider,
-	loadNativeEmbeddingModel,
-	type ProviderDiagnostics,
-} from "./embeddings.ts"
+import { detectProvider, type ProviderDiagnostics } from "./embeddings.ts"
 import { LucidRetrieval } from "./retrieval.ts"
 
 // === Multi-Client Configuration ===
@@ -152,19 +148,18 @@ function formatDiagnostics(d: ProviderDiagnostics): string {
  */
 async function initializeEmbeddings(): Promise<void> {
 	try {
-		// Pre-load native embedding model before detection
-		loadNativeEmbeddingModel()
-
 		const { config, diagnostics } = await detectProvider()
+		if (diagnostics.endpointError) {
+			console.error(
+				`[lucid] Custom endpoint skipped: ${diagnostics.endpointError}`
+			)
+		}
 		if (config) {
-			retrieval.setEmbeddingConfig(config)
+			retrieval.migrateEmbeddingsIfNeeded(config)
 			hasSemanticSearch = true
 			console.error(
 				`[lucid] Embedding provider: ${config.provider} (${config.model || "default"})`
 			)
-
-			// Migrate stale embeddings if model changed
-			retrieval.migrateEmbeddingsIfNeeded(config)
 		} else {
 			console.error(
 				"[lucid] ⚠️  No embedding provider found - using recency-only retrieval"
@@ -267,7 +262,10 @@ function startBackgroundConsolidationProcessor(): void {
 	// Full consolidation: every hour
 	setInterval(() => {
 		try {
-			const stats = engine.runFullConsolidation()
+			const stats = engine.runFullConsolidation(
+				undefined,
+				retrieval.getEmbeddingSpace()
+			)
 			const total =
 				stats.freshToConsolidating +
 				stats.consolidatingToConsolidated +
@@ -722,7 +720,7 @@ server.tool(
 	{},
 	async () => {
 		try {
-			const stats = retrieval.storage.getStats()
+			const stats = retrieval.storage.getStats(retrieval.getEmbeddingSpace())
 
 			return {
 				content: [
@@ -1216,8 +1214,10 @@ server.tool(
 			const associations = retrieval.storage.getAllAssociations()
 			const weakCount = associations.filter((a) => a.strength < 0.1).length
 			const recentEpisodes = retrieval.storage.getRecentEpisodes(undefined, 5)
-			const pendingEmbeddings =
-				retrieval.storage.getMemoriesWithoutEmbeddings(1000)
+			const pendingEmbeddings = retrieval.storage.getMemoriesWithoutEmbeddings(
+				1000,
+				retrieval.getEmbeddingSpace()
+			)
 			return {
 				content: [
 					{
