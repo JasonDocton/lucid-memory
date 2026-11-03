@@ -1084,6 +1084,15 @@ if ($InstallClaude) {
     } catch {
         Write-Warn "Could not configure Claude hook in settings.json - manual setup may be needed"
     }
+
+    $CaptureMode = "keep"
+    $Choice = Read-Host "Save Claude's assistant replies in Lucid? [y/n, Enter keeps current setting; default off]"
+    if ($Choice -match '^[Yy]') { $CaptureMode = "on" }
+    if ($Choice -match '^[Nn]') { $CaptureMode = "off" }
+    & bun run --cwd "$LucidDir\server" --no-env-file --no-install "$LucidDir\server\src\claude-hook.ts" $CaptureMode
+    if ($LASTEXITCODE -ne 0) { Write-Warn "Could not configure assistant-response capture." }
+    Write-Host "Manage assistant-response capture with: lucid config claude-responses on|off"
+
 }
 
 if ($InstallCodex) {

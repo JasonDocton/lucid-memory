@@ -132,6 +132,11 @@ else
     echo ""
 fi
 
+# Remove the direct Stop handler before deleting its executable.
+if [ -f "$LUCID_DIR/hooks/claude-stop.ts" ]; then
+    bun run --cwd "$LUCID_DIR/hooks" --no-env-file --no-install "$LUCID_DIR/hooks/claude-stop.ts" off || exit 1
+fi
+
 # === Remove MCP Config ===
 
 if [ -f "$MCP_CONFIG" ]; then

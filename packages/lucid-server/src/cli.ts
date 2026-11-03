@@ -57,6 +57,17 @@ async function saveConfig(config: LucidConfig): Promise<void> {
 }
 
 async function main() {
+	if (command === "config" && args[1] === "claude-responses") {
+		const mode = args[2]
+		if (mode !== "on" && mode !== "off")
+			throw new Error("Usage: lucid config claude-responses on|off")
+		const { configureClaudeHook } = await import("./claude-hook.ts")
+		await configureClaudeHook(mode)
+		console.log(
+			`Claude response capture is ${mode}. Start a new Claude Code session.`
+		)
+		return
+	}
 	// Load config and resolve database path
 	const config = await loadConfig()
 	const dbPath = resolveDbPath(config, LUCID_CLIENT)
@@ -228,6 +239,7 @@ async function main() {
 					console.log(`
 Lucid Config Commands
 
+  lucid config claude-responses on|off      Configure assistant-response capture
   lucid config show                         Show current configuration
   lucid config set-mode <mode>              Set database mode (shared|per-client|profiles)
   lucid config set-profile <client> <name>  Set profile for a client
@@ -823,6 +835,7 @@ Commands:
     --type=TYPE                      Type: learning, decision, context, bug, solution
     --project=/path                  Associate with project
 
+  config claude-responses on|off     Configure Claude assistant-response capture
   config show                        Show current configuration
   config set-mode <mode>             Set database mode (shared|per-client|profiles)
   config set-profile <client> <name> Set profile for a client

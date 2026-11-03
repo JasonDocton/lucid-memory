@@ -125,6 +125,12 @@ if ($Confirm -notmatch "^[Yy]$") {
 }
 Write-Host ""
 
+$StopHandler = Join-Path $LucidDir 'hooks\claude-stop.ts'
+if (Test-Path $StopHandler) {
+    & bun run --cwd "$LucidDir\hooks" --no-env-file --no-install $StopHandler off
+    if ($LASTEXITCODE -ne 0) { throw "Could not remove the Lucid Stop hook. Uninstall stopped." }
+}
+
 # === Remove MCP Config ===
 
 if (Test-Path $McpConfig) {

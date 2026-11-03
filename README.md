@@ -245,20 +245,20 @@ Restart Lucid after changing a serving model. When the endpoint reports a differ
 <details>
 <summary><b>Optional Claude Code assistant-response capture</b></summary>
 
-**Existing v0.6.5 installations.** Close Lucid clients. From a full checkout of this repository, run `bash scripts/upgrade-v065-capture.sh` (on Windows, use Git Bash). This one-time migration verifies the five server source files it touches and preserves the database, profiles, dependencies and other hooks. It refuses locally edited sources. Use `--rollback` to restore the stock files after uninstalling the plugin. A fresh install from a revision containing this feature can skip the migration.
+If you select Claude Code during installation, the installer offers to capture assistant replies. You can also turn capture on or off afterward. Restart Claude Code after changing the setting.
+
+```shell
+lucid config claude-responses on
+lucid config claude-responses off
+```
+
+Lucid registers a command under `hooks.Stop` in your Claude Code settings. Your other Stop handlers stay in place. Turning capture off preserves replies you have already saved.
+
+**Existing v0.6.5 installations.** Close Lucid clients and run `bash scripts/upgrade-v065-capture.sh` from a full checkout (Git Bash on Windows). It checks the five server source files, enables the direct hook, and preserves database and profile settings. Use `--rollback` to remove the hook and restore the stock files. If the server already has response capture but the CLI predates this setting, run `bun run --no-env-file --no-install ./packages/lucid-server/src/claude-hook.ts on` from the checkout instead. Use `off` to disable it. The setup migrates an enabled user-level `claude-response-capture@lucid-memory` installation to the direct hook.
 
 The v0.6.5 migration installs response capture only. It keeps the v0.6.5 embedding cache code. Before a newer server upgrades a shared database for endpoint-specific vectors, stop and update **every** client that uses that database. A stock or capture-only v0.6.5 server can discard other models' cached vectors when it opens the upgraded database. Use separate databases if clients must run different versions during rollout.
 
-With an updated Lucid Memory installation, enable the first-party Claude Code plugin to save replies observed at a Claude Code Stop event. Start a new Claude session after installation.
-
-```shell
-claude plugin marketplace add JasonDocton/lucid-memory
-claude plugin install claude-response-capture@lucid-memory
-```
-
-The plugin saves up to 2,000 Unicode characters from each nonempty final reply in the active Claude database and project. Replies are tagged as assistant conversations and can be retrieved in later sessions. Lucid's configured embedding provider may process this text. Repeated delivery of the same reply for the same prompt is ignored. A Stop hook can ask Claude to continue, so a single user prompt can produce several replies. Capture requires a Stop payload with a session ID, prompt or turn ID, working directory, and final message. Use Claude Code 2.1.258 or later for the tested hook fields. Configless installations use the shared default. For named profiles, specify an absolute or home-relative database path.
-
-To turn off future capture, run `claude plugin uninstall claude-response-capture@lucid-memory` and start a new session. Previously stored replies stay in Lucid. Uninstall the plugin before removing Lucid itself.
+Lucid saves up to 2,000 Unicode characters from each nonempty final reply in the active Claude database and project. Replies are tagged as assistant conversations and can be retrieved in later sessions. Lucid's configured embedding provider may process this text. Repeated delivery of the same reply for the same prompt is ignored. A Stop hook can ask Claude to continue, so a single user prompt can produce several replies. Capture requires a Stop payload with a session ID, prompt or turn ID, working directory, and final message. Use Claude Code 2.1.258 or later for the tested hook fields. Configless installations use the shared default. For named profiles, specify an absolute or home-relative database path.
 
 </details>
 

@@ -1583,6 +1583,19 @@ if [ "$INSTALL_CLAUDE" = true ]; then
     else
         warn "Claude hook configuration requires manual setup"
     fi
+
+    capture_mode=keep
+    if [ "$INTERACTIVE" = true ]; then
+        read -r -p "Save Claude's assistant replies in Lucid? [y/n, Enter keeps current setting; default off]: " choice || choice=
+        case "$choice" in
+            [Yy]*) capture_mode=on ;;
+            [Nn]*) capture_mode=off ;;
+        esac
+    fi
+    if ! bun run --cwd "$LUCID_DIR/server" --no-env-file --no-install "$LUCID_DIR/server/src/claude-hook.ts" "$capture_mode"; then
+        warn "Could not configure assistant-response capture."
+    fi
+    echo "Manage assistant-response capture with: lucid config claude-responses on|off"
 fi
 
 # === Add to PATH ===

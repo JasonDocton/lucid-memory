@@ -1,8 +1,0 @@
-{
-	"name": "claude-response-capture",
-	"description": "Capture completed assistant replies in your Lucid Memory database.",
-	"version": "0.1.0",
-	"author": {
-		"name": "Lucid Memory"
-	}
-}

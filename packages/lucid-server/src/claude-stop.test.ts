@@ -4,6 +4,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -13,12 +14,8 @@ import { join, resolve } from "node:path"
 import { LucidStorage } from "./storage.ts"
 
 const server = resolve(import.meta.dir, "..")
-const plugin = join(server, "claude-response-capture")
-const manifest = await Bun.file(join(plugin, "hooks", "hooks.json")).json()
-const handler = manifest.hooks.Stop[0].hooks[0]
-const args = handler.args.map((arg: string) =>
-	arg.replace(/\$\{CLAUDE_PLUGIN_ROOT\}/g, plugin)
-)
+const setup = join(server, "src", "claude-hook.ts")
+let handler: { command: string; args: string[] }
 let home: string
 let dir: string
 let project: string
@@ -35,7 +32,7 @@ function configure(config: unknown) {
 	writeFileSync(join(dir, "config.json"), JSON.stringify(config))
 }
 async function run(input: string) {
-	const child = Bun.spawn([process.execPath, ...args], {
+	const child = Bun.spawn([process.execPath, ...handler.args], {
 		cwd: project,
 		env: { HOME: home, USERPROFILE: home, LUCID_CLIENT: "codex" },
 		stdin: new Blob([input]),
@@ -49,6 +46,29 @@ async function run(input: string) {
 	])
 	return { exit, stdout, stderr }
 }
+function configureHook(mode: "on" | "off" | "keep") {
+	return Bun.spawnSync(
+		[
+			process.execPath,
+			"run",
+			"--cwd",
+			server,
+			"--no-env-file",
+			"--no-install",
+			setup,
+			mode,
+		],
+		{
+			env: { HOME: home, USERPROFILE: home },
+			cwd: project,
+		}
+	)
+}
+function readSettings() {
+	return JSON.parse(
+		readFileSync(join(home, ".claude", "settings.json"), "utf8")
+	)
+}
 beforeEach(() => {
 	home = mkdtempSync(join(tmpdir(), "lucid-claude-"))
 	dir = join(home, ".lucid")
@@ -57,6 +77,8 @@ beforeEach(() => {
 	mkdirSync(project)
 	symlinkSync(server, join(dir, "server"), "junction")
 	configure({ databaseMode: "per-client" })
+	expect(configureHook("on").exitCode).toBe(0)
+	handler = readSettings().hooks.Stop[0].hooks[0]
 })
 afterEach(() => {
 	rmSync(home, { recursive: true, force: true })
@@ -196,7 +218,7 @@ test("disabled or broken configuration never falls back to the shared database",
 	expect(existsSync(join(dir, "memory.db"))).toBe(false)
 })
 
-test("the manifest does not load project preloads before reading private Stop input", async () => {
+test("the registered hook does not load project preloads before reading private Stop input", async () => {
 	expect(handler.command).toBe("bun")
 	writeFileSync(join(project, "bunfig.toml"), 'preload = ["./preload.ts"]')
 	// Record any execution, even if the hook exits before trying to store.
@@ -272,4 +294,62 @@ test("a dangling config symlink cannot redirect a private reply into the shared 
 	const result = await run(JSON.stringify(event()))
 	expect(result.exit).toBe(1)
 	expect(existsSync(join(dir, "memory.db"))).toBe(false)
+})
+
+test("enable, reinstall and disable preserve unrelated handlers and settings", () => {
+	const settingsPath = join(home, ".claude", "settings.json")
+	const sibling = { type: "command", command: "/team/stop.sh" }
+	const other = { type: "prompt", prompt: "Review the results" }
+	const fromUser = {
+		theme: "dark",
+		hooks: {
+			Stop: [{ matcher: "", hooks: [sibling, handler, other] }],
+			SessionStart: [{ hooks: [sibling] }],
+		},
+	}
+	writeFileSync(settingsPath, JSON.stringify(fromUser))
+	expect(configureHook("keep").exitCode).toBe(0)
+	expect(configureHook("on").exitCode).toBe(0)
+	expect(readFileSync(settingsPath, "utf8")).toBe(JSON.stringify(fromUser))
+	expect(configureHook("off").exitCode).toBe(0)
+	expect(readSettings()).toEqual({
+		...fromUser,
+		hooks: {
+			...fromUser.hooks,
+			Stop: [{ matcher: "", hooks: [sibling, other] }],
+		},
+	})
+})
+
+test("migrates the former opt-in exactly once; malformed settings remain untouched", () => {
+	const path = join(home, ".claude", "settings.json")
+	const other = { type: "command", command: "/other/stop.sh" }
+	writeFileSync(
+		path,
+		JSON.stringify({
+			enabledPlugins: {
+				"claude-response-capture@lucid-memory": true,
+				"other@team": true,
+			},
+			hooks: { Stop: [{ hooks: [other] }] },
+		})
+	)
+	expect(configureHook("keep").exitCode).toBe(0)
+	expect(configureHook("keep").exitCode).toBe(0)
+	expect(readSettings()).toEqual({
+		enabledPlugins: {
+			"claude-response-capture@lucid-memory": false,
+			"other@team": true,
+		},
+		hooks: { Stop: [{ hooks: [other] }, { hooks: [handler] }] },
+	})
+	writeFileSync(path, "{bad")
+	expect(configureHook("on").exitCode).toBe(1)
+	expect(readFileSync(path, "utf8")).toBe("{bad")
+})
+
+test("a normal noninteractive install preserves the opt-out", () => {
+	rmSync(join(home, ".claude", "settings.json"))
+	expect(configureHook("keep").exitCode).toBe(0)
+	expect(existsSync(join(home, ".claude", "settings.json"))).toBe(false)
 })

@@ -56,7 +56,13 @@ for name in "${files[@]}"; do
     matches "$before" "$installed" || all_from=false
     matches "$after" "$installed" || all_to=false
 done
-if [[ "$all_to" == true ]]; then echo "The requested sources are already installed."; exit 0; fi
+configure_capture() {
+    bun run --cwd "$repo" --no-env-file --no-install "$repo/packages/lucid-server/src/claude-hook.ts" "$1"
+}
+if [[ "$all_to" == true ]]; then
+    if [[ ${1:-} == --rollback ]]; then configure_capture off; else configure_capture on; fi
+    echo "The requested sources are already installed."; exit 0
+fi
 [[ "$all_from" == true ]] || { echo "Installed sources differ from the expected revision. No files changed." >&2; exit 1; }
 # Generate one patch with the verified byte sequences. Git checks every hunk before applying.
 cd "$stage"
@@ -64,5 +70,7 @@ rc=0
 git -c core.autocrlf=false diff --no-index --no-ext-diff --no-color --src-prefix=a/ --dst-prefix=b/ before after > changes.patch || rc=$?
 [[ $rc == 1 ]] || { echo "Could not prepare the source update." >&2; exit 1; }
 git -C "$server" -c core.autocrlf=false apply -p2 --whitespace=nowarn --check "$stage/changes.patch"
+if [[ ${1:-} == --rollback ]]; then configure_capture off; fi
 git -C "$server" -c core.autocrlf=false apply -p2 --whitespace=nowarn "$stage/changes.patch"
+if [[ ${1:-} != --rollback ]]; then configure_capture on; fi
 echo "Lucid server sources updated. Start a new session to load them."
