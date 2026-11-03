@@ -96,13 +96,13 @@ Pinecone stores vectors. We understand context.
 | **Recall** | 82.5% | 55.3% |
 | **Latency** | 2.7ms | 10-50ms |
 | **Monthly cost** | $0 | $70+ |
-| **Your data** | Stays on your machine | Sent to cloud |
+| **Your data** | Stored locally. Cloud embeddings send text to the provider | Sent to cloud |
 | **Recency awareness** | Yes (multiplicative) | No |
 | **Associative retrieval** | Yes (spreading activation) | No |
 
 Pinecone is a great vector database. But vector search isn't memory.
 
-Lucid Memory retrieves **50% more relevant context** (82.5% vs 55.3% recall), runs **10-20x faster** (local vs cloud), costs **nothing**, and keeps your code **private**—all while understanding that what you accessed yesterday matters more than what you accessed last year.
+Lucid Memory retrieves **50% more relevant context** (82.5% vs 55.3% recall), runs **10-20x faster** (local vs cloud), uses local storage and has no service fee with local embeddings—all while understanding that what you accessed yesterday matters more than what you accessed last year.
 
 ---
 
@@ -161,7 +161,7 @@ Spreading activation (depth 3) adds <0.1ms overhead.
 2. **Cognitive ranking** — MINERVA 2 cubing (`sim³`) suppresses weak matches before budgeting.
 3. **Multiplicative recency** — Relevance × recency, not relevance + recency. Irrelevant stays irrelevant.
 4. **Spreading activation** — Related memories activate each other. Co-edited files surface together.
-5. **No network** — Everything local. 2.7ms, not 200ms.
+5. **Local retrieval** — The benchmark used local embeddings and measured 2.7ms retrieval.
 6. **Rust core** — 743,000 memories/second throughput
 
 ---
@@ -223,6 +223,24 @@ That's it. Your AI coding assistant now remembers across sessions.
 8. Restarts Claude Code to activate (if selected)
 
 **Requirements:** 5GB free disk space, at least one supported client installed (Claude Code, Codex, or OpenCode)
+
+</details>
+
+<details>
+<summary><b>Optional Claude Code assistant-response capture</b></summary>
+
+**Existing v0.6.5 installations.** Close Lucid clients. From a full checkout of this repository, run `bash scripts/upgrade-v065-capture.sh` (on Windows, use Git Bash). This one-time migration verifies the five server source files it touches and preserves the database, profiles, dependencies and other hooks. It refuses locally edited sources. Use `--rollback` to restore the stock files after uninstalling the plugin. A fresh install from a revision containing this feature can skip the migration.
+
+With an updated Lucid Memory installation, enable the first-party Claude Code plugin to save replies observed at a Claude Code Stop event. Start a new Claude session after installation.
+
+```shell
+claude plugin marketplace add JasonDocton/lucid-memory
+claude plugin install claude-response-capture@lucid-memory
+```
+
+The plugin saves up to 2,000 Unicode characters from each nonempty final reply in the active Claude database and project. Replies are tagged as assistant conversations and can be retrieved in later sessions. Lucid's configured embedding provider may process this text. Repeated delivery of the same reply for the same prompt is ignored. A Stop hook can ask Claude to continue, so a single user prompt can produce several replies. Capture requires a Stop payload with a session ID, prompt or turn ID, working directory, and final message. Use Claude Code 2.1.258 or later for the tested hook fields. Configless installations use the shared default. For named profiles, specify an absolute or home-relative database path.
+
+To turn off future capture, run `claude plugin uninstall claude-response-capture@lucid-memory` and start a new session. Previously stored replies stay in Lucid. Uninstall the plugin before removing Lucid itself.
 
 </details>
 
@@ -643,10 +661,10 @@ When memory 0 activates, memory 1 receives proportional activation.
 
 ## Privacy & Data
 
-Lucid Memory runs entirely on your machine. Your memories never leave your computer.
+Lucid stores memories on your machine. If you enable a cloud embedding provider, Lucid sends memory text to that provider for indexing.
 
 - **Database location:** `~/.lucid/memory.db` (or `memory-<client>.db` / `memory-<profile>.db` if using isolation)
-- **What's stored:** Text summaries of learnings, decisions, and context—not your source code
+- **Stored content** can include prompts, decisions, and, if you enable response capture, excerpts from assistant replies. These may contain source code or secrets.
 - **Removing sensitive data:** Use `memory_forget` tool to delete specific memories
 - **Auto-updates:** Opt-in during installation; can be disabled in `~/.lucid/config.json`
 - **Configuration:** Client and database settings stored in `~/.lucid/config.json`

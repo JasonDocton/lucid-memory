@@ -7,11 +7,12 @@
  * Uses Bun's built-in SQLite for zero-dependency speed.
  */
 
-import { Database } from "bun:sqlite"
+import { Database, SQLiteError } from "bun:sqlite"
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { generateGist } from "./gist.ts"
 
 // ============================================================================
 // Native Rust Bindings (with TypeScript fallback)
@@ -347,9 +348,26 @@ export class LucidStorage {
 		}
 
 		this.db = new Database(dbPath)
-		this.db.exec("PRAGMA journal_mode = WAL")
-		this.db.exec("PRAGMA foreign_keys = ON")
 		this.db.exec("PRAGMA busy_timeout = 5000")
+		// SQLite can return BUSY immediately when two processes switch a fresh database to WAL.
+		const deadline = Date.now() + 5000
+		for (;;) {
+			try {
+				this.db.exec("PRAGMA journal_mode = WAL")
+				break
+			} catch (error) {
+				if (
+					!(error instanceof SQLiteError) ||
+					error.code !== "SQLITE_BUSY" ||
+					Date.now() >= deadline
+				) {
+					this.db.close()
+					throw error
+				}
+				Bun.sleepSync(25)
+			}
+		}
+		this.db.exec("PRAGMA foreign_keys = ON")
 
 		this.initSchema()
 	}
@@ -590,56 +608,43 @@ export class LucidStorage {
       CREATE INDEX IF NOT EXISTS idx_episode_links_source ON episode_temporal_links(source_event_id);
     `)
 
-		this.runMigrations()
+		if (this.missingColumns().length > 0) {
+			// Recheck under the write lock: another process may have finished the migration.
+			this.db
+				.transaction(() => {
+					for (const sql of this.missingColumns()) this.db.exec(sql)
+				})
+				.immediate()
+		}
 	}
 
-	private runMigrations(): void {
-		// Migration: Add cognitive feature columns to memories table
-		// Using ALTER TABLE ADD COLUMN with defaults for backward compatibility
-		const memoryColumns = this.db
-			.prepare(
-				"SELECT name FROM pragma_table_info('memories') WHERE name IN ('encoding_strength', 'encoding_context', 'consolidation_state', 'last_consolidated')"
-			)
-			.all() as { name: string }[]
-		const existingMemoryCols = new Set(memoryColumns.map((c) => c.name))
-
-		if (!existingMemoryCols.has("encoding_strength")) {
-			this.db.exec(
-				"ALTER TABLE memories ADD COLUMN encoding_strength REAL DEFAULT 0.5"
-			)
+	private missingColumns(): string[] {
+		const migrations = {
+			memories: {
+				encoding_strength: "REAL DEFAULT 0.5",
+				encoding_context: "TEXT DEFAULT '{}'",
+				consolidation_state: "TEXT DEFAULT 'fresh'",
+				last_consolidated: "INTEGER",
+			},
+			associations: {
+				last_reinforced: "INTEGER",
+				co_access_count: "INTEGER DEFAULT 1",
+			},
 		}
-		if (!existingMemoryCols.has("encoding_context")) {
-			this.db.exec(
-				"ALTER TABLE memories ADD COLUMN encoding_context TEXT DEFAULT '{}'"
-			)
+		const missing: string[] = []
+		for (const [table, columns] of Object.entries(migrations)) {
+			const existing = this.db.query(`PRAGMA table_info(${table})`).all() as {
+				name: string
+			}[]
+			const names = new Set(existing.map((row) => row.name))
+			for (const [column, definition] of Object.entries(columns)) {
+				if (!names.has(column))
+					missing.push(
+						`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`
+					)
+			}
 		}
-		if (!existingMemoryCols.has("consolidation_state")) {
-			this.db.exec(
-				"ALTER TABLE memories ADD COLUMN consolidation_state TEXT DEFAULT 'fresh'"
-			)
-		}
-		if (!existingMemoryCols.has("last_consolidated")) {
-			this.db.exec("ALTER TABLE memories ADD COLUMN last_consolidated INTEGER")
-		}
-
-		// Migration: Add cognitive feature columns to associations table
-		const assocColumns = this.db
-			.prepare(
-				"SELECT name FROM pragma_table_info('associations') WHERE name IN ('last_reinforced', 'co_access_count')"
-			)
-			.all() as { name: string }[]
-		const existingAssocCols = new Set(assocColumns.map((c) => c.name))
-
-		if (!existingAssocCols.has("last_reinforced")) {
-			this.db.exec(
-				"ALTER TABLE associations ADD COLUMN last_reinforced INTEGER"
-			)
-		}
-		if (!existingAssocCols.has("co_access_count")) {
-			this.db.exec(
-				"ALTER TABLE associations ADD COLUMN co_access_count INTEGER DEFAULT 1"
-			)
-		}
+		return missing
 	}
 
 	// ============================================================================
@@ -650,7 +655,32 @@ export class LucidStorage {
 	 * Store a new memory.
 	 */
 	storeMemory(input: MemoryInput): Memory {
-		const id = randomUUID()
+		return this.insertMemory(randomUUID(), input)
+	}
+
+	storeAssistantReply(
+		eventKey: string,
+		projectPath: string,
+		content: string
+	): void {
+		const id = `claude-response:${eventKey}`
+		this.db
+			.transaction(() => {
+				if (this.getMemory(id)) return
+				const project = this.getOrCreateProject(projectPath)
+				this.insertMemory(id, {
+					content,
+					type: "conversation",
+					gist: `Claude replied: ${generateGist(content, 135)}`,
+					projectId: project.id,
+					tags: ["claude", "assistant"],
+					encodingContext: { projectId: project.id },
+				})
+			})
+			.immediate()
+	}
+
+	private insertMemory(id: string, input: MemoryInput): Memory {
 		const now = Date.now()
 		const tags = JSON.stringify(input.tags ?? [])
 		const encodingContext = JSON.stringify(input.encodingContext ?? {})
@@ -1194,7 +1224,7 @@ export class LucidStorage {
 				`SELECT e.memory_id, e.vector, m.created_at, m.encoding_strength, m.access_count
 				 FROM embeddings e
 				 JOIN memories m ON e.memory_id = m.id
-				 WHERE 1=1 ${condition}`
+				 WHERE m.id NOT LIKE 'claude-response:%' ${condition}`
 			)
 			.all(...values) as {
 			memory_id: string
@@ -1511,27 +1541,14 @@ export class LucidStorage {
 	 * Get or create a project by path.
 	 */
 	getOrCreateProject(path: string, name?: string): Project {
-		const existing = this.db
-			.prepare(`SELECT * FROM projects WHERE path = ?`)
-			.get(path) as ProjectRow | null
-
-		if (existing) {
-			// Update last active
-			this.db
-				.prepare(`UPDATE projects SET last_active = ? WHERE id = ?`)
-				.run(Date.now(), existing.id)
-			return this.rowToProject(existing)
-		}
-
-		const id = randomUUID()
-		const now = Date.now()
-		this.db
+		const row = this.db
 			.prepare(`
-      INSERT INTO projects (id, path, name, last_active, context) VALUES (?, ?, ?, ?, '{}')
-    `)
-			.run(id, path, name ?? null, now)
-
-		return { id, path, name: name ?? null, lastActive: now, context: {} }
+			INSERT INTO projects (id, path, name, last_active, context) VALUES (?, ?, ?, ?, '{}')
+			ON CONFLICT(path) DO UPDATE SET last_active = excluded.last_active
+			RETURNING *
+		`)
+			.get(randomUUID(), path, name ?? null, Date.now()) as ProjectRow
+		return this.rowToProject(row)
 	}
 
 	/**

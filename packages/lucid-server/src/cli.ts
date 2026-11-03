@@ -14,6 +14,12 @@
  */
 
 import {
+	type DatabaseMode,
+	LUCID_DIR,
+	type LucidConfig,
+	resolveDbPath,
+} from "./database-path.ts"
+import {
 	detectProvider,
 	loadNativeEmbeddingModel,
 	type ProviderDiagnostics,
@@ -23,40 +29,18 @@ import type { MemoryType } from "./storage.ts"
 
 const args = process.argv.slice(2)
 const command = args[0]
+function memoryOption(prefix: string): string | undefined {
+	return args
+		.slice(2)
+		.find((arg) => arg.startsWith(prefix))
+		?.slice(prefix.length)
+}
 
 // Top-level regex for version tag stripping
 const versionTagRegex = /^v/
 
-// biome-ignore lint/style/noProcessEnv: CLI requires environment access
-const LUCID_DIR = `${process.env.HOME}/.lucid`
 // biome-ignore lint/style/noProcessEnv: CLI requires client detection
 const LUCID_CLIENT = process.env.LUCID_CLIENT || "claude"
-
-// Multi-client config types
-const databaseModes = {
-	shared: "shared",
-	perClient: "per-client",
-	profiles: "profiles",
-} as const
-
-type DatabaseMode = (typeof databaseModes)[keyof typeof databaseModes]
-
-interface ClientConfig {
-	enabled: boolean
-	profile: string
-}
-
-interface ProfileConfig {
-	dbPath: string
-}
-
-interface LucidConfig {
-	autoUpdate?: boolean
-	databaseMode?: DatabaseMode
-	clients?: Record<string, ClientConfig>
-	profiles?: Record<string, ProfileConfig>
-	installedAt?: string
-}
 
 async function loadConfig(): Promise<LucidConfig> {
 	try {
@@ -74,27 +58,6 @@ async function loadConfig(): Promise<LucidConfig> {
 async function saveConfig(config: LucidConfig): Promise<void> {
 	const configPath = `${LUCID_DIR}/config.json`
 	await Bun.write(configPath, JSON.stringify(config, null, 2))
-}
-
-function resolveDbPath(config: LucidConfig, client: string): string {
-	const mode = config.databaseMode || "shared"
-
-	if (mode === "per-client") {
-		return `${LUCID_DIR}/memory-${client}.db`
-	}
-
-	if (mode === "profiles") {
-		const clientConfig = config.clients?.[client]
-		const profileName = clientConfig?.profile || "default"
-		const profile = config.profiles?.[profileName]
-		const rawPath = profile?.dbPath || `${LUCID_DIR}/memory.db`
-		// biome-ignore lint/style/noProcessEnv: Required for tilde expansion
-		// biome-ignore lint/style/noNonNullAssertion: HOME always defined on Unix
-		const home = process.env.HOME!
-		return rawPath.startsWith("~") ? rawPath.replace("~", home) : rawPath
-	}
-
-	return `${LUCID_DIR}/memory.db`
 }
 
 async function main() {
@@ -291,9 +254,7 @@ Examples:
 
 		case "context": {
 			const task = args[1] || ""
-			const projectPath = args
-				.find((a) => a.startsWith("--project="))
-				?.split("=")[1]
+			const projectPath = memoryOption("--project=")
 			const budgetArg = args
 				.find((a) => a.startsWith("--budget="))
 				?.split("=")[1]
@@ -365,11 +326,9 @@ Examples:
 				process.exit(1)
 			}
 
-			const typeArg = args.find((a) => a.startsWith("--type="))?.split("=")[1]
+			const typeArg = memoryOption("--type=")
 			const type = (typeArg as MemoryType) || "learning"
-			const projectPath = args
-				.find((a) => a.startsWith("--project="))
-				?.split("=")[1]
+			const projectPath = memoryOption("--project=")
 
 			let projectId: string | undefined
 			if (projectPath) {

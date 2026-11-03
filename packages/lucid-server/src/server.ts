@@ -20,6 +20,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
 import { ConsolidationConfig, ReconsolidationConfig } from "./config.ts"
 import { ConsolidationEngine } from "./consolidation.ts"
+import { LUCID_DIR, type LucidConfig, resolveDbPath } from "./database-path.ts"
 import {
 	detectProvider,
 	loadNativeEmbeddingModel,
@@ -29,34 +30,8 @@ import { LucidRetrieval } from "./retrieval.ts"
 
 // === Multi-Client Configuration ===
 
-// biome-ignore lint/style/noProcessEnv: Required for user home directory
-const LUCID_DIR = `${process.env.HOME}/.lucid`
 // biome-ignore lint/style/noProcessEnv: Required for client detection
 const LUCID_CLIENT = process.env.LUCID_CLIENT || "claude"
-
-const databaseModes = {
-	shared: "shared",
-	perClient: "per-client",
-	profiles: "profiles",
-} as const
-
-type DatabaseMode = (typeof databaseModes)[keyof typeof databaseModes]
-
-interface ClientConfig {
-	enabled: boolean
-	profile: string
-}
-
-interface ProfileConfig {
-	dbPath: string
-}
-
-interface LucidConfig {
-	autoUpdate?: boolean
-	databaseMode?: DatabaseMode
-	clients?: Record<string, ClientConfig>
-	profiles?: Record<string, ProfileConfig>
-}
 
 async function loadConfig(): Promise<LucidConfig> {
 	try {
@@ -69,27 +44,6 @@ async function loadConfig(): Promise<LucidConfig> {
 		console.error("[lucid] Failed to load config:", error)
 	}
 	return {}
-}
-
-function resolveDbPath(config: LucidConfig, client: string): string {
-	const mode = config.databaseMode || "shared"
-
-	if (mode === "per-client") {
-		return `${LUCID_DIR}/memory-${client}.db`
-	}
-
-	if (mode === "profiles") {
-		const clientConfig = config.clients?.[client]
-		const profileName = clientConfig?.profile || "default"
-		const profile = config.profiles?.[profileName]
-		const rawPath = profile?.dbPath || `${LUCID_DIR}/memory.db`
-		// biome-ignore lint/style/noProcessEnv: Required for tilde expansion
-		// biome-ignore lint/style/noNonNullAssertion: HOME always defined on Unix
-		const home = process.env.HOME!
-		return rawPath.startsWith("~") ? rawPath.replace("~", home) : rawPath
-	}
-
-	return `${LUCID_DIR}/memory.db`
 }
 
 /**
