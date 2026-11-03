@@ -100,6 +100,20 @@ test("stores a distinct assistant conversation and collapses concurrent replays"
 			db.storeEmbedding(m.id, [0, 1], "test")
 		}
 		expect(db.findMostSimilarMemory([0, 1], projectId, 0.9)).toBeNull()
+		// A perfect match can be ineligible by role or by embedding model.
+		db.storeEmbedding(prompt.id, [0, 1], "previous-model")
+		expect(
+			db.findMostSimilarMemory([0, 1], projectId, 0.9, {
+				model: "test",
+				dimensions: 2,
+			})
+		).toBeNull()
+		expect(
+			db.findMostSimilarMemory([0, 1], projectId, 0.9, {
+				model: "previous-model",
+				dimensions: 2,
+			})?.memoryId
+		).toBe(prompt.id)
 		expect(existsSync(join(dir, "memory-codex.db"))).toBe(false)
 	} finally {
 		db.close()
