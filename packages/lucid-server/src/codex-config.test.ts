@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite"
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import {
 	existsSync,
@@ -11,7 +12,6 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { LucidStorage } from "./storage.ts"
 
 const src = resolve(import.meta.dir, "..")
 let home: string
@@ -31,6 +31,30 @@ function config() {
 			string,
 			{ command: string; args?: string[]; env?: Record<string, string> }
 		>
+	}
+}
+function capturedRows(name: string) {
+	const db = new Database(join(home, ".lucid", name), { readonly: true })
+	try {
+		const query = db.prepare<
+			{
+				content: string
+				tags: string
+				projectId: string | null
+				path: string | null
+			},
+			[]
+		>(
+			`SELECT m.content, m.tags, m.project_id AS projectId, p.path FROM memories m
+			 LEFT JOIN projects p ON p.id = m.project_id`
+		)
+		try {
+			return query.all()
+		} finally {
+			query.finalize()
+		}
+	} finally {
+		db.close(true)
 	}
 }
 beforeEach(() => {
@@ -95,22 +119,14 @@ test("installs one root notifier, retains an existing notifier and isolates the 
 		realpathSync(directory),
 		input,
 	])
-	const storage = new LucidStorage({
-		dbPath: join(home, ".lucid", "memory-codex.db"),
-	})
-	try {
-		const rows = storage.getAllForRetrieval(
-			storage.getOrCreateProject(directory).id
-		).memories
-		expect(rows).toHaveLength(2)
-		expect(rows.map((m) => m.content).sort()).toEqual([
-			"A short answer.",
-			"first question\nsecond line",
-		])
-		expect(rows.every((m) => m.tags.includes("codex"))).toBe(true)
-	} finally {
-		storage.close()
-	}
+	const rows = capturedRows("memory-codex.db")
+	expect(rows).toHaveLength(2)
+	expect(rows.map((m) => m.content).sort()).toEqual([
+		"A short answer.",
+		"first question\nsecond line",
+	])
+	expect(rows.every((m) => m.path === directory)).toBe(true)
+	expect(rows.every((m) => JSON.parse(m.tags).includes("codex"))).toBe(true)
 	expect(existsSync(join(home, ".lucid", "memory-claude.db"))).toBe(false)
 	expect(run("uninstall").exitCode).toBe(0)
 	expect(config().notify).toEqual(previous)
@@ -301,15 +317,10 @@ test("accepts older object-shaped notifications without inventing a project", ()
 		{ cwd: directory, env }
 	)
 	expect(child.exitCode).toBe(0)
-	const db = new LucidStorage({ dbPath: join(home, ".lucid", "memory.db") })
-	try {
-		const rows = db.getAllForRetrieval().memories
-		expect(rows.map((m) => m.content).sort()).toEqual([
-			"legacy question",
-			"legacy reply",
-		])
-		expect(rows.every((m) => !m.projectId)).toBe(true)
-	} finally {
-		db.close()
-	}
+	const rows = capturedRows("memory.db")
+	expect(rows.map((m) => m.content).sort()).toEqual([
+		"legacy question",
+		"legacy reply",
+	])
+	expect(rows.every((m) => m.projectId === null)).toBe(true)
 })
