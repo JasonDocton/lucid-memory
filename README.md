@@ -219,7 +219,7 @@ That's it. Your AI coding assistant now remembers across sessions.
 4. Lets you choose which clients to configure (Claude Code, Codex, OpenCode — any combination)
 5. Optionally configures database isolation (shared, per-client, or custom profiles)
 6. Configures MCP settings for your chosen clients
-7. Installs hooks and plugins for automatic memory capture
+7. Sets up prompt and reply capture for each selected client
 8. Restarts Claude Code to activate (if selected)
 
 **Requirements:** 5GB free disk space, at least one supported client installed (Claude Code, Codex, or OpenCode)
@@ -243,22 +243,15 @@ Lucid caches each endpoint, model identity, and vector width separately. Clients
 Restart Lucid after changing a serving model. When the endpoint reports a different model behind an alias, Lucid rejects the change until restart. If the endpoint serves different weights under the same reported name and width, use a new model name so Lucid can distinguish them.
 
 <details>
-<summary><b>Optional Claude Code assistant-response capture</b></summary>
+<summary><b>Automatic capture for selected clients</b></summary>
 
-If you select Claude Code during installation, the installer offers to capture assistant replies. You can also turn capture on or off afterward. Restart Claude Code after changing the setting.
+Selecting **Claude Code** registers Lucid's MCP server, `UserPromptSubmit`, and `Stop`. Selecting **Codex** registers Lucid's MCP server and turn-completion notifier. Select **both** (`1 2`) to configure both clients in the same installation. Start new client sessions after installation. The database choice determines whether they share memories. If Codex already runs a notification command, Lucid passes it the original event as well.
 
-```shell
-lucid config claude-responses on
-lucid config claude-responses off
-```
-
-Lucid registers a command under `hooks.Stop` in your Claude Code settings. Your other Stop handlers stay in place. Turning capture off preserves replies you have already saved.
-
-**Existing v0.6.5 installations.** Close Lucid clients and run `bash scripts/upgrade-v065-capture.sh` from a full checkout (Git Bash on Windows). It checks the five server source files, enables the direct hook, and preserves database and profile settings. Use `--rollback` to remove the hook and restore the stock files. If the server already has response capture but the CLI predates this setting, run `bun run --no-env-file --no-install ./packages/lucid-server/src/claude-hook.ts on` from the checkout instead. Use `off` to disable it. The setup migrates an enabled user-level `claude-response-capture@lucid-memory` installation to the direct hook.
+**Existing v0.6.5 installations without the new installer.** Close Lucid clients and run `bash scripts/upgrade-v065-capture.sh` from a full checkout (Git Bash on Windows). It checks the five server source files, enables the direct hook, and preserves database and profile settings. Use `--rollback` to remove the hook and restore the stock files. The installer also migrates the previous user-level Claude response hook.
 
 The v0.6.5 migration installs response capture only. It keeps the v0.6.5 embedding cache code. Before a newer server upgrades a shared database for endpoint-specific vectors, stop and update **every** client that uses that database. A stock or capture-only v0.6.5 server can discard other models' cached vectors when it opens the upgraded database. Use separate databases if clients must run different versions during rollout.
 
-Lucid saves up to 2,000 Unicode characters from each nonempty final reply in the active Claude database and project. Replies are tagged as assistant conversations and can be retrieved in later sessions. Lucid's configured embedding provider may process this text. Repeated delivery of the same reply for the same prompt is ignored. A Stop hook can ask Claude to continue, so a single user prompt can produce several replies. Capture requires a Stop payload with a session ID, prompt or turn ID, working directory, and final message. Use Claude Code 2.1.258 or later for the tested hook fields. Configless installations use the shared default. For named profiles, specify an absolute or home-relative database path.
+For Claude Code, Lucid saves up to 2,000 Unicode characters from each nonempty final reply in the active Claude database and project. Replies are tagged as assistant conversations and can be retrieved in later sessions. Lucid's configured embedding provider may process this text. Repeated delivery of the same reply for the same prompt is ignored. A Stop hook can ask Claude to continue, so a single user prompt can produce several replies. Capture requires a Stop payload with a session ID, prompt or turn ID, working directory, and final message. Use Claude Code 2.1.258 or later for the tested hook fields. Configless installations use the shared default. For named profiles, specify an absolute or home-relative database path.
 
 </details>
 
@@ -682,7 +675,7 @@ When memory 0 activates, memory 1 receives proportional activation.
 Lucid stores memories on your machine. If you enable a cloud embedding provider, Lucid sends memory text to that provider for indexing.
 
 - **Database location:** `~/.lucid/memory.db` (or `memory-<client>.db` / `memory-<profile>.db` if using isolation)
-- **Stored content** can include prompts, decisions, and, if you enable response capture, excerpts from assistant replies. These may contain source code or secrets.
+- **Stored content** can include prompts, decisions, and, for selected clients, excerpts from assistant replies. These may contain source code or secrets.
 - **Removing sensitive data:** Use `memory_forget` tool to delete specific memories
 - **Auto-updates:** Opt-in during installation; can be disabled in `~/.lucid/config.json`
 - **Configuration:** Client and database settings stored in `~/.lucid/config.json`

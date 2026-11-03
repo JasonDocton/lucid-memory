@@ -715,23 +715,33 @@ export class LucidStorage {
 		return this.insertMemory(randomUUID(), input)
 	}
 
-	storeAssistantReply(
+	storeCapturedMessage(
+		client: "claude" | "codex",
+		role: "assistant" | "user",
 		eventKey: string,
-		projectPath: string,
+		projectPath: string | undefined,
 		content: string
 	): void {
-		const id = `claude-response:${eventKey}`
+		const id = `${client}-${role === "assistant" ? "response" : "prompt"}:${eventKey}`
+		const speaker =
+			role === "user"
+				? "User said"
+				: client === "claude"
+					? "Claude replied"
+					: "Codex replied"
 		this.db
 			.transaction(() => {
 				if (this.getMemory(id)) return
-				const project = this.getOrCreateProject(projectPath)
+				const projectId = projectPath
+					? this.getOrCreateProject(projectPath).id
+					: undefined
 				this.insertMemory(id, {
 					content,
 					type: "conversation",
-					gist: `Claude replied: ${generateGist(content, 135)}`,
-					projectId: project.id,
-					tags: ["claude", "assistant"],
-					encodingContext: { projectId: project.id },
+					gist: `${speaker}: ${generateGist(content, 135)}`,
+					projectId,
+					tags: [client, role],
+					encodingContext: { projectId },
 				})
 			})
 			.immediate()
@@ -1320,7 +1330,7 @@ export class LucidStorage {
 				`SELECT e.memory_id, e.vector, m.created_at, m.encoding_strength, m.access_count
 				 FROM embeddings e
 				 JOIN memories m ON e.memory_id = m.id
-				 WHERE m.id NOT LIKE 'claude-response:%' ${condition} ${filter.sql}`
+				 WHERE m.id NOT LIKE 'claude-response:%' AND m.id NOT LIKE 'codex-response:%' AND m.id NOT LIKE 'codex-prompt:%' ${condition} ${filter.sql}`
 			)
 			.all(...values, ...filter.args) as {
 			memory_id: string

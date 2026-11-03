@@ -57,11 +57,11 @@ show_banner() {
 show_banner
 
 LUCID_DIR="$HOME/.lucid"
-CLAUDE_SETTINGS_DIR="$HOME/.claude"
+CLAUDE_SETTINGS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 # Claude Code uses ~/.claude.json for MCP servers
-MCP_CONFIG="$HOME/.claude.json"
+MCP_CONFIG="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
 # Codex uses ~/.codex/config.toml
-CODEX_DIR="$HOME/.codex"
+CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 CODEX_CONFIG="$CODEX_DIR/config.toml"
 # OpenCode uses ~/.config/opencode/opencode.json
 OPENCODE_CONFIG_DIR="$HOME/.config/opencode"
@@ -133,22 +133,24 @@ else
 fi
 
 # Remove the direct Stop handler before deleting its executable.
-if [ -f "$LUCID_DIR/hooks/claude-stop.ts" ]; then
+if [ -f "$LUCID_DIR/server/src/client-setup.ts" ] && [ -f "$LUCID_DIR/hooks/claude-stop.ts" ]; then
+    bun run --cwd "$LUCID_DIR/server" --no-env-file --no-install "$LUCID_DIR/server/src/client-setup.ts" claude uninstall || exit 1
+elif [ -f "$LUCID_DIR/hooks/claude-stop.ts" ]; then
     bun run --cwd "$LUCID_DIR/hooks" --no-env-file --no-install "$LUCID_DIR/hooks/claude-stop.ts" off || exit 1
 fi
 
 # === Remove MCP Config ===
 
-if [ -f "$MCP_CONFIG" ]; then
+if [ ! -f "$LUCID_DIR/server/src/client-setup.ts" ] && [ -f "$MCP_CONFIG" ]; then
     info "Removing MCP server config..."
 
     # Use Python or Node to safely edit JSON
     if command -v python3 &> /dev/null; then
-        python3 << 'PYTHON_SCRIPT'
+        python3 - "$MCP_CONFIG" << 'PYTHON_SCRIPT'
 import json
-import os
+import sys
 
-config_path = os.path.expanduser("~/.claude.json")
+config_path = sys.argv[1]
 try:
     with open(config_path, 'r') as f:
         config = json.load(f)
@@ -163,11 +165,9 @@ except Exception as e:
 PYTHON_SCRIPT
         success "MCP server config removed"
     elif command -v node &> /dev/null; then
-        node << 'NODE_SCRIPT'
+        node - "$MCP_CONFIG" << 'NODE_SCRIPT'
 const fs = require('fs');
-const path = require('path');
-
-const configPath = path.join(process.env.HOME, '.claude.json');
+const configPath = process.argv[2];
 try {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     if (config.mcpServers && config.mcpServers['lucid-memory']) {
@@ -184,7 +184,9 @@ fi
 
 # === Remove Codex Config ===
 
-if [ -f "$CODEX_CONFIG" ]; then
+if [ -f "$LUCID_DIR/server/src/client-setup.ts" ]; then
+    bun run --cwd "$LUCID_DIR/server" --no-env-file --no-install "$LUCID_DIR/server/src/client-setup.ts" codex uninstall || exit 1
+elif [ -f "$CODEX_CONFIG" ]; then
     info "Removing Codex MCP configuration..."
 
     # Remove lucid-memory section from config.toml
@@ -248,7 +250,7 @@ info "Removing hook configuration..."
 
 # Remove hook config from settings.json (Claude)
 CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
-if [ -f "$CLAUDE_SETTINGS" ]; then
+if [ ! -f "$LUCID_DIR/server/src/client-setup.ts" ] && [ -f "$CLAUDE_SETTINGS" ]; then
     if command -v jq &> /dev/null; then
         # Remove only Lucid's hook entries, preserve other hooks
         if jq '
@@ -268,9 +270,9 @@ if [ -f "$CLAUDE_SETTINGS" ]; then
             warn "Could not update settings.json with jq"
         fi
     elif command -v python3 &> /dev/null; then
-        python3 << 'PYTHON_SCRIPT'
-import json, os, re
-settings_path = os.path.expanduser("~/.claude/settings.json")
+        python3 - "$CLAUDE_SETTINGS" << 'PYTHON_SCRIPT'
+import json, sys, re
+settings_path = sys.argv[1]
 try:
     with open(settings_path, 'r') as f:
         config = json.load(f)

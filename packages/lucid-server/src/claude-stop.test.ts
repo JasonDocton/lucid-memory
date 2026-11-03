@@ -46,7 +46,7 @@ async function run(input: string) {
 	])
 	return { exit, stdout, stderr }
 }
-function configureHook(mode: "on" | "off" | "keep") {
+function configureHook(mode: "on" | "off" | "keep" | "install" | "uninstall") {
 	return Bun.spawnSync(
 		[
 			process.execPath,
@@ -348,8 +348,22 @@ test("migrates the former opt-in exactly once; malformed settings remain untouch
 	expect(readFileSync(path, "utf8")).toBe("{bad")
 })
 
-test("a normal noninteractive install preserves the opt-out", () => {
+test("selecting Claude installs prompt and response capture with no extra step", () => {
 	rmSync(join(home, ".claude", "settings.json"))
-	expect(configureHook("keep").exitCode).toBe(0)
-	expect(existsSync(join(home, ".claude", "settings.json"))).toBe(false)
+	const prompt = join(
+		dir,
+		"hooks",
+		process.platform === "win32"
+			? "user-prompt-submit.ps1"
+			: "user-prompt-submit.sh"
+	)
+	writeFileSync(prompt, "")
+	expect(configureHook("install").exitCode).toBe(0)
+	const settings = readSettings()
+	expect(settings.hooks.Stop).toHaveLength(1)
+	expect(settings.hooks.UserPromptSubmit).toHaveLength(1)
+	expect(configureHook("install").exitCode).toBe(0)
+	expect(readSettings()).toEqual(settings)
+	expect(configureHook("uninstall").exitCode).toBe(0)
+	expect(readSettings().hooks).toEqual({})
 })

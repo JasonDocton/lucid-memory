@@ -27,10 +27,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Detect if we're running interactively (stdin is a terminal)
-# When piped via curl | bash, stdin is NOT a terminal, so we use defaults
+# Read installer choices from the terminal even when Bash receives the script via curl.
 INTERACTIVE=false
 if [ -t 0 ]; then
+    exec 3<&0
+    INTERACTIVE=true
+elif [ -t 1 ] && { exec 3</dev/tty; } 2>/dev/null; then
     INTERACTIVE=true
 fi
 
@@ -171,61 +173,6 @@ validate_json() {
     fi
 }
 
-# Add lucid-memory to MCP config (pure bash fallback)
-add_to_mcp_config() {
-    local config_file="$1"
-    local server_path="$2"
-
-    # If jq is available, use it (safest)
-    if command -v jq &> /dev/null; then
-        jq --arg cmd "$server_path" '.mcpServers["lucid-memory"] = {"type": "stdio", "command": $cmd, "args": [], "env": {"LUCID_CLIENT": "claude"}}' \
-            "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
-        return 0
-    fi
-
-    # If python is available, use it
-    if command -v python3 &> /dev/null; then
-        python3 - "$config_file" "$server_path" << 'PYEOF'
-import json, sys
-config_file, server_path = sys.argv[1], sys.argv[2]
-with open(config_file, 'r') as f:
-    config = json.load(f)
-if 'mcpServers' not in config:
-    config['mcpServers'] = {}
-config['mcpServers']['lucid-memory'] = {'type': 'stdio', 'command': server_path, 'args': [], 'env': {'LUCID_CLIENT': 'claude'}}
-with open(config_file, 'w') as f:
-    json.dump(config, f, indent=2)
-PYEOF
-        return 0
-    fi
-
-    # Last resort: check if we can safely append
-    if grep -q '"mcpServers"' "$config_file"; then
-        warn "Cannot safely modify existing MCP config without jq or python"
-        echo ""
-        echo "Please manually add this to $config_file in the mcpServers section:"
-        echo -e "${BOLD}  \"lucid-memory\": { \"type\": \"stdio\", \"command\": \"$server_path\", \"args\": [], \"env\": {\"LUCID_CLIENT\": \"claude\"} }${NC}"
-        echo ""
-        if [ "$INTERACTIVE" = true ]; then
-            read -p "Press Enter after you've added it (or Ctrl+C to abort)..."
-        fi
-    else
-        # No mcpServers key, we can write fresh
-        cat > "$config_file" << EOF
-{
-  "mcpServers": {
-    "lucid-memory": {
-      "type": "stdio",
-      "command": "$server_path",
-      "args": [],
-      "env": {"LUCID_CLIENT": "claude"}
-    }
-  }
-}
-EOF
-    fi
-}
-
 # Restart Claude Code
 restart_claude_code() {
     echo ""
@@ -273,14 +220,6 @@ if ! command -v curl &> /dev/null; then
         "Please install curl first:\n  Ubuntu/Debian: sudo apt install curl\n  Fedora: sudo dnf install curl"
 fi
 
-# Check for Claude Code (optional - user may install for other clients only)
-CLAUDE_SETTINGS_DIR="$HOME/.claude"
-if [ ! -d "$CLAUDE_SETTINGS_DIR" ]; then
-    warn "Claude Code not found (~/.claude does not exist)"
-    echo "  If you plan to use Claude Code, install it first: https://claude.ai/download"
-    echo ""
-fi
-
 # Check disk space
 AVAILABLE_SPACE=$(get_available_space)
 if [ -n "$AVAILABLE_SPACE" ] && [ "$AVAILABLE_SPACE" -lt "$MIN_DISK_SPACE" ] 2>/dev/null; then
@@ -290,13 +229,7 @@ if [ -n "$AVAILABLE_SPACE" ] && [ "$AVAILABLE_SPACE" -lt "$MIN_DISK_SPACE" ] 2>/
 fi
 
 # Check existing MCP config
-MCP_CONFIG="$HOME/.claude.json"
-if [ -f "$MCP_CONFIG" ]; then
-    if ! validate_json "$MCP_CONFIG"; then
-        fail "Existing MCP config is malformed" \
-            "The file $MCP_CONFIG contains invalid JSON.\nPlease fix or remove it, then run this installer again."
-    fi
-fi
+MCP_CONFIG="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
 
 # === Detect what needs to be installed ===
 
@@ -361,7 +294,7 @@ fi
 INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Lucid Memory server"
 INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} BGE embedding model (~220MB)"
 INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Whisper model (74MB)"
-INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Claude Code hooks"
+INSTALL_LIST="${INSTALL_LIST}\n  ${C4}•${NC} Capture hooks for selected clients"
 
 # === Show installation summary ===
 
@@ -377,7 +310,7 @@ echo ""
 
 # Ask for confirmation
 if [ "$INTERACTIVE" = true ]; then
-    read -p "Continue with installation? [Y/n]: " CONFIRM
+    read -p "Continue with installation? [Y/n]: " CONFIRM <&3
     CONFIRM=${CONFIRM:-Y}
     if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
         echo ""
@@ -1029,7 +962,7 @@ echo ""
 
 OPENAI_KEY=""
 if [ "$INTERACTIVE" = true ]; then
-    read -p "OpenAI API key (press Enter to skip): " OPENAI_KEY
+    read -p "OpenAI API key (press Enter to skip): " OPENAI_KEY <&3
 fi
 if [ -n "$OPENAI_KEY" ]; then
     echo "OPENAI_API_KEY=$OPENAI_KEY" > "$LUCID_DIR/.env"
@@ -1056,7 +989,7 @@ INSTALL_CODEX=false
 INSTALL_OPENCODE=false
 
 if [ "$INTERACTIVE" = true ]; then
-    read -p "Choice: " CLIENT_INPUT
+    read -p "Choice: " CLIENT_INPUT <&3
     CLIENT_INPUT=${CLIENT_INPUT:-"1 2 3"}
 else
     echo "Non-interactive mode, defaulting to Claude Code only..."
@@ -1076,6 +1009,15 @@ done
 if [ "$VALID_SELECTION" = false ]; then
     warn "Invalid selection, defaulting to Claude Code"
     INSTALL_CLAUDE=true
+fi
+
+if [ "$INSTALL_CLAUDE" = true ]; then
+    if [ -f "$MCP_CONFIG" ]; then
+        if ! validate_json "$MCP_CONFIG"; then
+            fail "Existing MCP config is malformed" \
+                "The file $MCP_CONFIG contains invalid JSON.\nPlease fix or remove it, then run this installer again."
+        fi
+    fi
 fi
 
 # === Database Mode (only if multiple clients) ===
@@ -1100,7 +1042,7 @@ if [ "$SELECTED_COUNT" -ge 2 ]; then
     echo ""
 
     if [ "$INTERACTIVE" = true ]; then
-        read -p "Choice [1]: " DB_CHOICE
+        read -p "Choice [1]: " DB_CHOICE <&3
         DB_CHOICE=${DB_CHOICE:-1}
     else
         DB_CHOICE=1
@@ -1112,17 +1054,17 @@ if [ "$SELECTED_COUNT" -ge 2 ]; then
             DB_MODE="profiles"
             if [ "$INTERACTIVE" = true ]; then
                 if [ "$INSTALL_CLAUDE" = true ]; then
-                    read -p "Profile for Claude Code [home]: " CLAUDE_PROFILE
+                    read -p "Profile for Claude Code [home]: " CLAUDE_PROFILE <&3
                     CLAUDE_PROFILE=${CLAUDE_PROFILE:-home}
                     CLAUDE_PROFILE=$(echo "$CLAUDE_PROFILE" | sed 's/[^a-zA-Z0-9_-]//g')
                 fi
                 if [ "$INSTALL_CODEX" = true ]; then
-                    read -p "Profile for Codex [work]: " CODEX_PROFILE
+                    read -p "Profile for Codex [work]: " CODEX_PROFILE <&3
                     CODEX_PROFILE=${CODEX_PROFILE:-work}
                     CODEX_PROFILE=$(echo "$CODEX_PROFILE" | sed 's/[^a-zA-Z0-9_-]//g')
                 fi
                 if [ "$INSTALL_OPENCODE" = true ]; then
-                    read -p "Profile for OpenCode [default]: " OPENCODE_PROFILE
+                    read -p "Profile for OpenCode [default]: " OPENCODE_PROFILE <&3
                     OPENCODE_PROFILE=${OPENCODE_PROFILE:-default}
                     OPENCODE_PROFILE=$(echo "$OPENCODE_PROFILE" | sed 's/[^a-zA-Z0-9_-]//g')
                 fi
@@ -1218,7 +1160,7 @@ echo ""
 
 AUTO_UPDATE=false
 if [ "$INTERACTIVE" = true ]; then
-    read -p "Enable automatic updates? [Y/n]: " AUTO_UPDATE_CHOICE
+    read -p "Enable automatic updates? [Y/n]: " AUTO_UPDATE_CHOICE <&3
     AUTO_UPDATE_CHOICE=${AUTO_UPDATE_CHOICE:-Y}
     if [[ "$AUTO_UPDATE_CHOICE" =~ ^[Yy]$ ]]; then
         AUTO_UPDATE=true
@@ -1228,151 +1170,10 @@ else
     AUTO_UPDATE=true
 fi
 
-# Write config file with multi-client support
-write_config() {
-    local auto_update="$1"
-    local db_mode="$2"
-    local install_claude="$3"
-    local install_codex="$4"
-    local claude_profile="$5"
-    local codex_profile="$6"
-    local install_opencode="$7"
-    local opencode_profile="$8"
-
-    # Build clients section dynamically
-    local client_entries=()
-    if [ "$install_claude" = true ]; then
-        client_entries+=("\"claude\": {\"enabled\": true, \"profile\": \"$claude_profile\"}")
-    fi
-    if [ "$install_codex" = true ]; then
-        client_entries+=("\"codex\": {\"enabled\": true, \"profile\": \"$codex_profile\"}")
-    fi
-    if [ "$install_opencode" = true ]; then
-        client_entries+=("\"opencode\": {\"enabled\": true, \"profile\": \"$opencode_profile\"}")
-    fi
-
-    # Join client entries with comma
-    local clients=""
-    local first=true
-    for entry in "${client_entries[@]}"; do
-        if [ "$first" = true ]; then
-            clients="$entry"
-            first=false
-        else
-            clients="$clients, $entry"
-        fi
-    done
-
-    # Build profiles section - collect unique non-default profiles
-    local profiles="\"default\": {\"dbPath\": \"~/.lucid/memory.db\"}"
-    local seen_profiles="default"
-    for prof in "$claude_profile" "$codex_profile" "$opencode_profile"; do
-        if [ "$prof" != "default" ]; then
-            # Check if already added (bash 3.x compatible string check)
-            case " $seen_profiles " in
-                *" $prof "*)
-                    # Already added
-                    ;;
-                *)
-                    profiles="$profiles, \"$prof\": {\"dbPath\": \"~/.lucid/memory-$prof.db\"}"
-                    seen_profiles="$seen_profiles $prof"
-                    ;;
-            esac
-        fi
-    done
-
-    cat > "$LUCID_DIR/config.json" << CONFIGEOF
-{
-  "autoUpdate": $auto_update,
-  "installedAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-  "databaseMode": "$db_mode",
-  "clients": {$clients},
-  "profiles": {$profiles}
-}
-CONFIGEOF
-}
-
-write_config "$AUTO_UPDATE" "$DB_MODE" "$INSTALL_CLAUDE" "$INSTALL_CODEX" "$CLAUDE_PROFILE" "$CODEX_PROFILE" "$INSTALL_OPENCODE" "$OPENCODE_PROFILE"
-
 if [ "$AUTO_UPDATE" = true ]; then
     success "Auto-updates enabled"
 else
     success "Auto-updates disabled (run 'lucid update' manually)"
-fi
-
-# === Configure Claude Code ===
-
-if [ "$INSTALL_CLAUDE" = true ]; then
-    echo ""
-    echo "Configuring Claude Code..."
-
-    # Backup existing config
-    if [ -f "$MCP_CONFIG" ]; then
-        cp "$MCP_CONFIG" "$MCP_CONFIG.backup"
-        success "Backed up existing config"
-
-        # Add our server to existing config
-        add_to_mcp_config "$MCP_CONFIG" "$LUCID_BIN/lucid-server"
-    else
-        # Create new config
-        cat > "$MCP_CONFIG" << EOF
-{
-  "mcpServers": {
-    "lucid-memory": {
-      "type": "stdio",
-      "command": "$LUCID_BIN/lucid-server",
-      "args": [],
-      "env": {"LUCID_CLIENT": "claude"}
-    }
-  }
-}
-EOF
-    fi
-
-    success "Claude Code MCP configured"
-fi
-
-# === Configure OpenAI Codex ===
-
-configure_codex_mcp() {
-    local CODEX_DIR="$HOME/.codex"
-    local CODEX_CONFIG="$CODEX_DIR/config.toml"
-
-    mkdir -p "$CODEX_DIR"
-
-    # Backup if exists
-    [ -f "$CODEX_CONFIG" ] && cp "$CODEX_CONFIG" "$CODEX_CONFIG.backup"
-
-    # Remove existing lucid-memory section if present
-    if [ -f "$CODEX_CONFIG" ] && grep -q '^\[mcp_servers\.lucid-memory\]' "$CODEX_CONFIG"; then
-        # Use awk to remove the section (everything from the header to next section or EOF)
-        awk '
-            /^\[mcp_servers\.lucid-memory\]/ { skip=1; next }
-            /^\[/ { skip=0 }
-            !skip
-        ' "$CODEX_CONFIG" > "$CODEX_CONFIG.tmp"
-        mv "$CODEX_CONFIG.tmp" "$CODEX_CONFIG"
-    fi
-
-    # Append new config
-    cat >> "$CODEX_CONFIG" << CODEXEOF
-
-[mcp_servers.lucid-memory]
-enabled = true
-command = "$HOME/.lucid/bin/lucid-server"
-args = []
-
-[mcp_servers.lucid-memory.env]
-LUCID_CLIENT = "codex"
-CODEXEOF
-
-    success "Codex MCP configured"
-}
-
-if [ "$INSTALL_CODEX" = true ]; then
-    echo ""
-    echo "Configuring OpenAI Codex..."
-    configure_codex_mcp
 fi
 
 # === Configure OpenCode ===
@@ -1466,28 +1267,6 @@ if [ "$INSTALL_CLAUDE" = true ]; then
     fi
 fi
 
-# Codex hook (notify on turn-complete)
-if [ "$INSTALL_CODEX" = true ]; then
-    if [ -f "$LUCID_DIR/server/hooks/codex-notify.sh" ]; then
-        cp "$LUCID_DIR/server/hooks/codex-notify.sh" "$LUCID_HOOKS_DIR/codex-notify.sh"
-        chmod +x "$LUCID_HOOKS_DIR/codex-notify.sh"
-        success "Codex hook script installed"
-
-        # Add notify hook to Codex config
-        CODEX_CONFIG="$HOME/.codex/config.toml"
-        if [ -f "$CODEX_CONFIG" ]; then
-            # Check if notify is already configured
-            if ! grep -q '^notify' "$CODEX_CONFIG"; then
-                echo "" >> "$CODEX_CONFIG"
-                echo "notify = [\"$LUCID_HOOKS_DIR/codex-notify.sh\"]" >> "$CODEX_CONFIG"
-                success "Codex notify hook configured"
-            fi
-        fi
-    else
-        warn "Codex hook script not found - automatic memory capture disabled"
-    fi
-fi
-
 # OpenCode plugin
 if [ "$INSTALL_OPENCODE" = true ]; then
     if [ -f "$LUCID_DIR/server/plugins/opencode-lucid-memory.ts" ]; then
@@ -1500,103 +1279,12 @@ if [ "$INSTALL_OPENCODE" = true ]; then
     fi
 fi
 
-# Configure hook in Claude Code settings
-CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
-HOOK_COMMAND="$LUCID_HOOKS_DIR/user-prompt-submit.sh"
-
-configure_hook() {
-    local settings_file="$1"
-    local hook_cmd="$2"
-
-    # If jq is available, use it
-    if command -v jq &> /dev/null; then
-        if [ -f "$settings_file" ]; then
-            # Merge: keep existing non-Lucid hooks, add Lucid's entry
-            jq --arg cmd "$hook_cmd" '
-                .hooks.UserPromptSubmit = (
-                    [(.hooks.UserPromptSubmit // [])[] | select(
-                        (.hooks // []) | all(.command | test("lucid|user-prompt-submit") | not)
-                    )] + [{"hooks": [{"type": "command", "command": $cmd}]}]
-                )
-            ' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
-        else
-            jq -n --arg cmd "$hook_cmd" '
-                {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": $cmd}]}]}}
-            ' > "$settings_file"
-        fi
-        return 0
-    fi
-
-    # If python is available, use it
-    if command -v python3 &> /dev/null; then
-        python3 - "$settings_file" "$hook_cmd" << 'PYEOF'
-import json, sys, os, re
-settings_file, hook_cmd = sys.argv[1], sys.argv[2]
-if os.path.exists(settings_file):
-    with open(settings_file, 'r') as f:
-        config = json.load(f)
-else:
-    config = {}
-if 'hooks' not in config:
-    config['hooks'] = {}
-existing = config['hooks'].get('UserPromptSubmit', [])
-filtered = [e for e in existing if not any(
-    re.search(r'lucid|user-prompt-submit', h.get('command', ''))
-    for h in e.get('hooks', [])
-)]
-filtered.append({'hooks': [{'type': 'command', 'command': hook_cmd}]})
-config['hooks']['UserPromptSubmit'] = filtered
-with open(settings_file, 'w') as f:
-    json.dump(config, f, indent=2)
-PYEOF
-        return 0
-    fi
-
-    # Fallback: create minimal settings file
-    if [ ! -f "$settings_file" ]; then
-        cat > "$settings_file" << EOF
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {"type": "command", "command": "$hook_cmd"}
-        ]
-      }
-    ]
-  }
-}
-EOF
-        return 0
-    fi
-
-    warn "Cannot safely modify settings.json without jq or python"
-    echo ""
-    echo "Please manually add this to $settings_file:"
-    echo -e "${BOLD}\"hooks\": { \"UserPromptSubmit\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"$hook_cmd\" }] }] }${NC}"
-    return 1
-}
-
-if [ "$INSTALL_CLAUDE" = true ]; then
-    if configure_hook "$CLAUDE_SETTINGS" "$HOOK_COMMAND"; then
-        success "Claude hook configured in settings.json"
-    else
-        warn "Claude hook configuration requires manual setup"
-    fi
-
-    capture_mode=keep
-    if [ "$INTERACTIVE" = true ]; then
-        read -r -p "Save Claude's assistant replies in Lucid? [y/n, Enter keeps current setting; default off]: " choice || choice=
-        case "$choice" in
-            [Yy]*) capture_mode=on ;;
-            [Nn]*) capture_mode=off ;;
-        esac
-    fi
-    if ! bun run --cwd "$LUCID_DIR/server" --no-env-file --no-install "$LUCID_DIR/server/src/claude-hook.ts" "$capture_mode"; then
-        warn "Could not configure assistant-response capture."
-    fi
-    echo "Manage assistant-response capture with: lucid config claude-responses on|off"
-fi
+clients=()
+[ "$INSTALL_CLAUDE" = true ] && clients+=("claude=$CLAUDE_PROFILE")
+[ "$INSTALL_CODEX" = true ] && clients+=("codex=$CODEX_PROFILE")
+[ "$INSTALL_OPENCODE" = true ] && clients+=("opencode=$OPENCODE_PROFILE")
+bun run --cwd "$LUCID_DIR/server" --no-env-file --no-install "$LUCID_DIR/server/src/client-setup.ts" select "$DB_MODE" "$AUTO_UPDATE" "${clients[@]}"
+success "Selected clients configured"
 
 # === Add to PATH ===
 

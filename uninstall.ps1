@@ -59,11 +59,11 @@ function Show-Banner {
 Show-Banner
 
 $LucidDir = "$env:USERPROFILE\.lucid"
-$ClaudeSettingsDir = "$env:USERPROFILE\.claude"
+$ClaudeSettingsDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { "$env:USERPROFILE\.claude" }
 # Claude Code uses ~/.claude.json for MCP servers
-$McpConfig = "$env:USERPROFILE\.claude.json"
+$McpConfig = if ($env:CLAUDE_CONFIG_DIR) { Join-Path $env:CLAUDE_CONFIG_DIR ".claude.json" } else { "$env:USERPROFILE\.claude.json" }
 # Codex uses ~/.codex/config.toml
-$CodexDir = "$env:USERPROFILE\.codex"
+$CodexDir = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { "$env:USERPROFILE\.codex" }
 $CodexConfig = "$CodexDir\config.toml"
 # OpenCode uses ~/.config/opencode/opencode.json
 $OpenCodeConfigDir = "$env:USERPROFILE\.config\opencode"
@@ -126,14 +126,17 @@ if ($Confirm -notmatch "^[Yy]$") {
 Write-Host ""
 
 $StopHandler = Join-Path $LucidDir 'hooks\claude-stop.ts'
-if (Test-Path $StopHandler) {
+if ((Test-Path "$LucidDir\server\src\client-setup.ts") -and (Test-Path $StopHandler)) {
+    & bun run --cwd "$LucidDir\server" --no-env-file --no-install "$LucidDir\server\src\client-setup.ts" claude uninstall
+    if ($LASTEXITCODE -ne 0) { throw "Could not remove Lucid's Claude hooks." }
+} elseif (Test-Path $StopHandler) {
     & bun run --cwd "$LucidDir\hooks" --no-env-file --no-install $StopHandler off
     if ($LASTEXITCODE -ne 0) { throw "Could not remove the Lucid Stop hook. Uninstall stopped." }
 }
 
 # === Remove MCP Config ===
 
-if (Test-Path $McpConfig) {
+if (!(Test-Path "$LucidDir\server\src\client-setup.ts") -and (Test-Path $McpConfig)) {
     Write-Info "Removing MCP server config..."
     try {
         $Config = Get-Content $McpConfig -Raw | ConvertFrom-Json
@@ -150,7 +153,10 @@ if (Test-Path $McpConfig) {
 
 # === Remove Codex Config ===
 
-if (Test-Path $CodexConfig) {
+if (Test-Path "$LucidDir\server\src\client-setup.ts") {
+    & bun run --cwd "$LucidDir\server" --no-env-file --no-install "$LucidDir\server\src\client-setup.ts" codex uninstall
+    if ($LASTEXITCODE -ne 0) { throw "Could not remove Lucid's Codex configuration." }
+} elseif (Test-Path $CodexConfig) {
     if (Select-String -Path $CodexConfig -Pattern '^\[mcp_servers\.lucid-memory\]' -Quiet) {
         Write-Info "Removing Codex MCP configuration..."
         $Lines = Get-Content $CodexConfig
@@ -198,7 +204,7 @@ if (Test-Path "$OpenCodeConfigDir\plugins\lucid-memory.ts") {
 
 # Remove hook configuration from settings.json
 $ClaudeSettings = "$ClaudeSettingsDir\settings.json"
-if (Test-Path $ClaudeSettings) {
+if (!(Test-Path "$LucidDir\server\src\client-setup.ts") -and (Test-Path $ClaudeSettings)) {
     Write-Info "Removing hook configuration..."
     try {
         $Config = Get-Content $ClaudeSettings -Raw | ConvertFrom-Json

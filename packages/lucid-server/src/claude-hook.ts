@@ -33,7 +33,7 @@ function object(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-async function readOptional(path: string) {
+export async function readOptional(path: string) {
 	try {
 		return await readFile(path, "utf8")
 	} catch (error) {
@@ -42,7 +42,7 @@ async function readOptional(path: string) {
 	}
 }
 
-async function replaceFile(
+export async function replaceFile(
 	path: string,
 	contents: string,
 	previous: string | undefined,
@@ -61,7 +61,51 @@ async function replaceFile(
 	}
 }
 
-export async function configureClaudeHook(action: "on" | "off" | "keep") {
+type Action = "install" | "uninstall" | "on" | "off" | "keep"
+
+type Command = {
+	type: "command"
+	command: string
+	args: string[]
+	timeout?: number
+}
+
+// Update only the matching command within each group, preserving its siblings and matcher.
+function updateHandlers(
+	hooks: Record<string, unknown>,
+	event: string,
+	wanted: Command,
+	enable: boolean,
+	legacy?: string
+) {
+	const groups = hooks[event] ?? []
+	if (!Array.isArray(groups)) throw new Error(`Invalid Claude ${event} hooks`)
+	let found = false
+	const result = groups.flatMap((group: unknown) => {
+		if (!object(group) || !Array.isArray(group.hooks))
+			throw new Error(`Invalid Claude ${event} handler group`)
+		const remaining = group.hooks.filter((hook: unknown) => {
+			if (!object(hook) || hook.type !== "command") return true
+			if (legacy && hook.command === legacy && hook.args === undefined)
+				return false
+			if (
+				hook.command !== wanted.command ||
+				JSON.stringify(hook.args) !== JSON.stringify(wanted.args)
+			)
+				return true
+			const retain = enable && !found
+			found = true
+			return retain
+		})
+		if (remaining.length === group.hooks.length) return [group]
+		return remaining.length ? [{ ...group, hooks: remaining }] : []
+	})
+	if (enable && !found) result.push({ hooks: [wanted] })
+	if (result.length) hooks[event] = result
+	else if (groups.length) delete hooks[event]
+}
+
+export async function configureClaudeHook(action: Action, checkOnly = false) {
 	const location = join(
 		// biome-ignore lint/style/noProcessEnv: Claude honors a custom configuration directory.
 		process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"),
@@ -81,31 +125,51 @@ export async function configureClaudeHook(action: "on" | "off" | "keep") {
 	const original = JSON.stringify(config)
 	const hooks = config.hooks === undefined ? {} : config.hooks
 	if (!object(hooks)) throw new Error("Invalid Claude hooks")
-	const groups = hooks.Stop === undefined ? [] : hooks.Stop
-	if (!Array.isArray(groups)) throw new Error("Invalid Claude Stop hooks")
-
 	const plugins = config.enabledPlugins
 	const priorOptIn = object(plugins) && plugins[oldPlugin] === true
-	let found = false
-	const updated = groups.flatMap((group: unknown) => {
-		if (!object(group) || !Array.isArray(group.hooks))
-			throw new Error("Invalid Claude Stop handler group")
-		const remaining = group.hooks.filter((hook: unknown) => {
-			if (
-				!object(hook) ||
-				hook.type !== "command" ||
-				hook.command !== "bun" ||
-				JSON.stringify(hook.args) !== JSON.stringify(args)
+	const stop: Command = { type: "command", command: "bun", args, timeout: 10 }
+	const groups = hooks.Stop ?? []
+	if (!Array.isArray(groups)) throw new Error("Invalid Claude Stop hooks")
+	const hasStop = groups.some(
+		(group) =>
+			object(group) &&
+			Array.isArray(group.hooks) &&
+			group.hooks.some(
+				(h) =>
+					object(h) &&
+					h.type === "command" &&
+					h.command === stop.command &&
+					JSON.stringify(h.args) === JSON.stringify(args)
 			)
-				return true
-			const retain = action !== "off" && !found
-			found = true
-			return retain
-		})
-		if (remaining.length === group.hooks.length) return [group]
-		return remaining.length ? [{ ...group, hooks: remaining }] : []
-	})
-	const enable = action === "on" || (action === "keep" && (priorOptIn || found))
+	)
+	const enable =
+		action === "install" ||
+		action === "on" ||
+		(action === "keep" && (priorOptIn || hasStop))
+	if (action === "install" || action === "uninstall") {
+		const windows = process.platform === "win32"
+		const prompt = join(
+			lucid,
+			"hooks",
+			windows ? "user-prompt-submit.ps1" : "user-prompt-submit.sh"
+		)
+		if (action === "install" && !(await Bun.file(prompt).exists()))
+			throw new Error("Lucid prompt hook is missing")
+		const command = windows ? "powershell" : prompt
+		const promptArgs = windows
+			? ["-ExecutionPolicy", "Bypass", "-File", prompt]
+			: []
+		const legacy = windows
+			? `powershell -ExecutionPolicy Bypass -File "${prompt}"`
+			: prompt
+		updateHandlers(
+			hooks,
+			"UserPromptSubmit",
+			{ type: "command", command, args: promptArgs },
+			action === "install",
+			legacy
+		)
+	}
 	if (enable) {
 		if (!(await Bun.file(handler).exists()))
 			throw new Error(
@@ -113,20 +177,14 @@ export async function configureClaudeHook(action: "on" | "off" | "keep") {
 			)
 		const source = await readFile(import.meta.path, "utf8")
 		const existing = await readOptional(installedHook)
-		if (source !== existing)
+		if (!checkOnly && source !== existing)
 			await replaceFile(installedHook, source, existing, 0o600)
-		if (!found)
-			updated.push({
-				hooks: [{ type: "command", command: "bun", args, timeout: 10 }],
-			})
 	}
-	if (JSON.stringify(updated) !== JSON.stringify(groups)) {
+	updateHandlers(hooks, "Stop", stop, enable)
+	if (Object.keys(hooks).length || config.hooks !== undefined)
 		config.hooks = hooks
-		if (updated.length) hooks.Stop = updated
-		else delete hooks.Stop
-	}
 	if (object(plugins) && priorOptIn) plugins[oldPlugin] = false
-	if (JSON.stringify(config) === original) return
+	if (checkOnly || JSON.stringify(config) === original) return
 	await replaceFile(
 		path,
 		`${JSON.stringify(config, null, 2)}\n`,
@@ -138,7 +196,13 @@ export async function configureClaudeHook(action: "on" | "off" | "keep") {
 if (import.meta.main) {
 	const action = process.argv[2]
 	try {
-		if (action === "on" || action === "off" || action === "keep")
+		if (
+			action === "on" ||
+			action === "off" ||
+			action === "keep" ||
+			action === "install" ||
+			action === "uninstall"
+		)
 			await configureClaudeHook(action)
 		else if (action !== undefined) throw new Error("Expected on, off, or keep")
 		else if (await Bun.file(join(lucid, "server", "package.json")).exists()) {

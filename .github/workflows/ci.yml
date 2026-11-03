@@ -27,6 +27,26 @@ jobs:
       - run: bun run --cwd packages/lucid-server typecheck
       - run: bun test packages/lucid-server/src
 
+  windows-client-setup:
+    name: Windows client setup
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - shell: pwsh
+        run: |
+          foreach ($file in 'install.ps1', 'uninstall.ps1') {
+            $errors = $null
+            $null = [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file).Path, [ref]$null, [ref]$errors)
+            if ($errors) { throw ($errors | Out-String) }
+          }
+      - run: bun test packages/lucid-server/src/codex-config.test.ts
+
   test:
     name: Test
     runs-on: ubuntu-latest
