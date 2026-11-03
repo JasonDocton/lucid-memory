@@ -12,9 +12,8 @@ import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { generateGist } from "./gist.ts"
-
 import type { EmbeddingSpace } from "./embeddings.ts"
+import { generateGist } from "./gist.ts"
 
 // Every semantic comparison uses the same model and Float32 blob width.
 function embeddingFilter(space?: EmbeddingSpace): {
