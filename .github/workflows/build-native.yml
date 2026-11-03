@@ -170,6 +170,7 @@ jobs:
         working-directory: packages/lucid-perception
         shell: bash
         run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then export WHISPER_DONT_GENERATE_BINDINGS=1; fi
           bunx napi build --platform --release \
             --target ${{ matrix.target }} \
             --manifest-path ../../crates/lucid-perception-napi/Cargo.toml \
