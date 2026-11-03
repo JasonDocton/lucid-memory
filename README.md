@@ -247,6 +247,8 @@ Restart Lucid after changing a serving model. When the endpoint reports a differ
 
 **Existing v0.6.5 installations.** Close Lucid clients. From a full checkout of this repository, run `bash scripts/upgrade-v065-capture.sh` (on Windows, use Git Bash). This one-time migration verifies the five server source files it touches and preserves the database, profiles, dependencies and other hooks. It refuses locally edited sources. Use `--rollback` to restore the stock files after uninstalling the plugin. A fresh install from a revision containing this feature can skip the migration.
 
+The v0.6.5 migration installs response capture only. It keeps the v0.6.5 embedding cache code. Before a newer server upgrades a shared database for endpoint-specific vectors, stop and update **every** client that uses that database. A stock or capture-only v0.6.5 server can discard other models' cached vectors when it opens the upgraded database. Use separate databases if clients must run different versions during rollout.
+
 With an updated Lucid Memory installation, enable the first-party Claude Code plugin to save replies observed at a Claude Code Stop event. Start a new Claude session after installation.
 
 ```shell
