@@ -640,7 +640,7 @@ pub fn compute_tag_strength(
 	};
 
 	// Combine with diminishing returns
-	let combined = base_confidence + (access_boost * 0.3) + significance_boost;
+	let combined = access_boost.mul_add(0.3, base_confidence) + significance_boost;
 	combined.min(1.0)
 }
 
