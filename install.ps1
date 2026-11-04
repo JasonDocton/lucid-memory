@@ -637,7 +637,7 @@ if ($PkgFixNeeded) {
 
 # Create CLI wrapper (batch file for Windows)
 # Use %USERPROFILE% (resolved at runtime) so non-ASCII usernames work
-Write-Utf8 "$LucidBin\lucid.cmd" "@echo off`r`nbun run `"%USERPROFILE%\.lucid\server\src\cli.ts`" %*`r`n"
+Copy-Item "$LucidDir\server\bin\lucid-cli.cmd" "$LucidBin\lucid.cmd" -Force
 
 # Create server launcher with auto-restart wrapper
 Write-Utf8 "$LucidBin\lucid-server.cmd" "@echo off`r`npowershell -ExecutionPolicy Bypass -File `"%USERPROFILE%\.lucid\server\bin\lucid-server-wrapper.ps1`" %*`r`n"

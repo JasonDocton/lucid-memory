@@ -1,1 +1,3 @@
 scripts/upgrade-v065-capture.sh text eol=lf
+packages/lucid-server/bin/lucid-cli.sh text eol=lf
+packages/lucid-server/bin/lucid-cli.cmd text eol=crlf

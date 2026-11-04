@@ -933,10 +933,7 @@ if ! bun install; then
 fi
 
 # Create CLI wrapper
-cat > "$LUCID_BIN/lucid" << 'EOF'
-#!/bin/bash
-exec bun run "$HOME/.lucid/server/src/cli.ts" "$@"
-EOF
+cp "$LUCID_DIR/server/bin/lucid-cli.sh" "$LUCID_BIN/lucid"
 chmod +x "$LUCID_BIN/lucid"
 
 # Copy server wrapper with auto-restart

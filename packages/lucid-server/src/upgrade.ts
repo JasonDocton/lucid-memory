@@ -88,14 +88,19 @@ async function allowedJournalPaths() {
 			(name) => join(LUCID_DIR, "hooks", name)
 		)
 	)
+	allowed.add(join(LUCID_DIR, "bin", "lucid"))
+	allowed.add(join(LUCID_DIR, "bin", "lucid.cmd"))
 	for (const config of [
 		join(env.CLAUDE_CONFIG_DIR || homedir(), ".claude.json"),
 		join(env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "settings.json"),
 		join(env.CODEX_HOME || join(homedir(), ".codex"), "config.toml"),
 	]) {
-		const path = (await exists(config))
-			? await realpath(config)
-			: resolve(config)
+		const path = await realpath(config).catch(
+			(error: NodeJS.ErrnoException) => {
+				if (error.code !== "ENOENT") throw error
+				return resolve(config)
+			}
+		)
 		allowed.add(path)
 		allowed.add(`${path}.backup`)
 	}
@@ -265,6 +270,19 @@ async function refreshClients() {
 		)
 		await writeWithUndo(target, source, await readOptional(target), 0o755)
 	}
+	const launcher =
+		process.platform === "win32" ? "lucid-cli.cmd" : "lucid-cli.sh"
+	const command = join(
+		LUCID_DIR,
+		"bin",
+		process.platform === "win32" ? "lucid.cmd" : "lucid"
+	)
+	await writeWithUndo(
+		command,
+		await readFile(join(LUCID_DIR, "server", "bin", launcher), "utf8"),
+		await readOptional(command),
+		0o755
+	)
 	for (const client of clients) await configureClient(client, "install", true)
 	for (const client of clients)
 		await configureClient(client, "install", false, writeWithUndo)
