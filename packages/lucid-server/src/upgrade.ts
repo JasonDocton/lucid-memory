@@ -26,6 +26,7 @@ const repo = "https://github.com/JasonDocton/lucid-memory.git"
 const work = join(LUCID_DIR, ".upgrade-work")
 const packages = ["native", "perception", "server"] as const
 const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+const legacyBackup = /^server-backup-(\d+)$/
 const legacyTemp = /^update-tmp-(\d+)$/
 
 function version(value: unknown): string {
@@ -169,8 +170,20 @@ async function refreshClients() {
 	const config: LucidConfig = text === undefined ? {} : JSON.parse(text)
 	if (!config || typeof config !== "object" || Array.isArray(config))
 		throw new Error("Invalid Lucid configuration")
+	if (
+		config.clients !== undefined &&
+		(!config.clients ||
+			typeof config.clients !== "object" ||
+			Array.isArray(config.clients))
+	)
+		throw new Error("Invalid saved Lucid clients")
 	const clients: ("claude" | "codex")[] = []
 	for (const client of ["claude", "codex"] as const) {
+		if (
+			config.clients?.[client] !== undefined &&
+			typeof config.clients[client]?.enabled !== "boolean"
+		)
+			throw new Error(`Invalid saved selection for ${client}`)
 		const legacyHook =
 			client === "codex"
 				? "codex-notify.sh"
@@ -278,43 +291,76 @@ async function applyCheckout(
 	)
 }
 
+async function verifiedTag(checkout: string, target: string) {
+	const { stdout: head } = await run("git", [
+		"-C",
+		checkout,
+		"rev-parse",
+		"HEAD",
+	])
+	const { stdout: tag } = await run("git", [
+		"-C",
+		checkout,
+		"rev-parse",
+		`refs/tags/v${target}^{commit}`,
+	])
+	return head.trim() === tag.trim()
+}
+
+async function checkoutRelease(target: string) {
+	const checkout = join(work, "checkout")
+	await run(
+		"git",
+		[
+			"clone",
+			"--quiet",
+			"--depth",
+			"1",
+			"--single-branch",
+			"--branch",
+			`v${target}`,
+			"--",
+			repo,
+			checkout,
+		],
+		{ timeout: 180000 }
+	)
+	if (!(await verifiedTag(checkout, target)))
+		throw new Error(`Could not verify v${target} tag`)
+	return checkout
+}
+
 export async function updateToRelease(target: string) {
 	target = version(target)
+	if (
+		!(await exists(work)) &&
+		Bun.semver.order(target, await packageVersion(join(LUCID_DIR, "server"))) <=
+			0
+	)
+		return false
+	let changed = false
 	await updateTransaction(async () => {
-		const current = await packageVersion(join(LUCID_DIR, "server"))
-		if (Bun.semver.order(target, current) <= 0) return
-		const checkout = join(work, "checkout")
-		await run(
-			"git",
-			[
-				"clone",
-				"--quiet",
-				"--depth",
-				"1",
-				"--single-branch",
-				"--branch",
-				`v${target}`,
-				"--",
-				repo,
-				checkout,
-			],
-			{ timeout: 180000 }
+		if (
+			Bun.semver.order(
+				target,
+				await packageVersion(join(LUCID_DIR, "server"))
+			) <= 0
 		)
-		await applyCheckout(checkout, target, false)
+			return
+		await applyCheckout(await checkoutRelease(target), target, false)
+		changed = true
 	})
+	return changed
 }
 
 export async function updateInstalled() {
 	const latest = await latestRelease()
-	const current = await packageVersion(join(LUCID_DIR, "server"))
-	if (Bun.semver.order(latest, current) <= 0) {
-		console.log(`Lucid ${current} is up to date.`)
-		return
-	}
-	await updateToRelease(latest)
-	console.log(
-		`Updated Lucid from ${current} to ${latest}. Restart your clients.`
-	)
+	if (await updateToRelease(latest))
+		console.log(`Updated to Lucid ${latest}. Restart your clients.`)
+	else
+		console.log(
+			`Lucid ${await packageVersion(join(LUCID_DIR, "server"))} is up to date.`
+		)
 }
 
 // Bun runs the root postinstall for v0.6.5's unmodified "bun install --production".
@@ -330,9 +376,9 @@ export async function finishLegacyUpdate(packageDir: string) {
 	const target = await packageVersion(live)
 	const entries = await readdir(LUCID_DIR)
 	// v0.6.5 calls Date.now() separately for its checkout and subsequent backup.
-	const backups = []
+	const backups: number[] = []
 	for (const entry of entries) {
-		const match = /^server-backup-(\d+)$/.exec(entry)
+		const match = legacyBackup.exec(entry)
 		if (!match) continue
 		const manifest = await readOptional(join(LUCID_DIR, entry, "package.json"))
 		if (manifest && JSON.parse(manifest).version === "0.6.5")
@@ -360,7 +406,18 @@ export async function finishLegacyUpdate(packageDir: string) {
 		)
 	const [checkout] = candidates
 	if (!checkout) return
-	await updateTransaction(() => applyCheckout(checkout, target, true))
+	// The legacy updater clones main. If main moved past the release, install the tag instead.
+	const published = await latestRelease()
+	await updateTransaction(async () => {
+		const exact =
+			target === published &&
+			(await verifiedTag(checkout, published).catch(() => false))
+		await applyCheckout(
+			exact ? checkout : await checkoutRelease(published),
+			published,
+			exact
+		)
+	})
 }
 
 async function updateFromCheckout() {
@@ -368,18 +425,6 @@ async function updateFromCheckout() {
 	const target = await packageVersion(
 		join(checkout, "packages", "lucid-server")
 	)
-	const { stdout: tag } = await run("git", [
-		"-C",
-		checkout,
-		"rev-parse",
-		`v${target}^{commit}`,
-	])
-	const { stdout: head } = await run("git", [
-		"-C",
-		checkout,
-		"rev-parse",
-		"HEAD",
-	])
 	const { stdout: changes } = await run("git", [
 		"-C",
 		checkout,
@@ -389,7 +434,7 @@ async function updateFromCheckout() {
 		"--",
 		"packages",
 	])
-	if (tag.trim() !== head.trim() || changes.trim())
+	if (!(await verifiedTag(checkout, target)) || changes.trim())
 		throw new Error(`Use a clean checkout of the published v${target} tag`)
 	await updateTransaction(async () => {
 		const current = await packageVersion(join(LUCID_DIR, "server"))

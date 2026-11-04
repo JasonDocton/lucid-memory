@@ -109,6 +109,8 @@ def exercise(root):
         prompts=[("Continue with installation? [Y/n]: ","y"),("OpenAI API key (press Enter to skip): ",""),("Choice: ",choice)]
         if len(clients)>1: prompts.append(("Choice [1]: ","2"))
         prompts.append(("Enable automatic updates? [Y/n]: ","n"))
+        # The postinstall subprocess independently checks the published release.
+        (home/".bunfig.toml").write_text("preload = ["+json.dumps(str(preload))+"]\n")
         install(installer,env,prompts)
         base=home/".lucid"
         cli=str(base/"bin/lucid")
