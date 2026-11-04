@@ -621,7 +621,7 @@ Examples:
 			try {
 				const pkgPath = `${LUCID_DIR}/server/package.json`
 				const pkg = await Bun.file(pkgPath).json()
-				console.log(pkg.lucidRelease ?? pkg.version ?? "unknown")
+				console.log(pkg.version ?? pkg.lucidRelease ?? "unknown")
 			} catch {
 				console.log("unknown")
 			}

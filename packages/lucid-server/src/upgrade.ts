@@ -42,6 +42,12 @@ async function packageVersion(path: string) {
 	return version(manifest.lucidRelease ?? manifest.version)
 }
 
+async function installedVersion() {
+	return version(
+		(await Bun.file(join(LUCID_DIR, "server", "package.json")).json()).version
+	)
+}
+
 export async function latestRelease() {
 	const response = await fetch(
 		"https://api.github.com/repos/JasonDocton/lucid-memory/releases/latest",
@@ -88,6 +94,7 @@ async function allowedJournalPaths() {
 			(name) => join(LUCID_DIR, "hooks", name)
 		)
 	)
+	allowed.add(join(LUCID_DIR, "server", "package.json"))
 	allowed.add(join(LUCID_DIR, "bin", "lucid"))
 	allowed.add(join(LUCID_DIR, "bin", "lucid.cmd"))
 	for (const config of [
@@ -296,23 +303,20 @@ async function refreshClients() {
 		await configureClient(client, "install", false, writeWithUndo)
 }
 
-async function stampInstalledManifest() {
+async function stampInstalledManifest(transactional: boolean) {
 	const path = join(LUCID_DIR, "server", "package.json")
-	const manifest = await Bun.file(path).json()
+	const previous = await readFile(path, "utf8")
+	const manifest = JSON.parse(previous)
 	const release = version(manifest.lucidRelease)
-	if (manifest.version !== release) {
-		const temp = `${path}.version-${process.pid}.tmp`
-		try {
-			await writeFile(
-				temp,
-				`${JSON.stringify({ ...manifest, version: release }, null, 2)}\n`,
-				{ flag: "wx" }
-			)
-			await rename(temp, path)
-		} finally {
-			await rm(temp, { force: true })
-		}
-	}
+	if (manifest.version === release) return
+	const mode = (await lstat(path)).mode & 0o777
+	const write = transactional ? writeWithUndo : replaceFile
+	await write(
+		path,
+		`${JSON.stringify({ ...manifest, version: release }, null, 2)}\n`,
+		previous,
+		mode
+	)
 }
 
 async function applyCheckout(
@@ -355,7 +359,6 @@ async function applyCheckout(
 			process.platform === "win32" ? "junction" : "dir"
 		)
 	}
-	await stampInstalledManifest()
 	// Use the newly installed release's hook definitions, even when the caller is an older updater.
 	await run(
 		process.execPath,
@@ -370,6 +373,7 @@ async function applyCheckout(
 		],
 		{ timeout: 30000 }
 	)
+	await stampInstalledManifest(true)
 }
 
 async function verifiedTag(checkout: string, target: string) {
@@ -415,19 +419,12 @@ export async function updateToRelease(target: string) {
 	target = version(target)
 	if (
 		!(await exists(work)) &&
-		Bun.semver.order(target, await packageVersion(join(LUCID_DIR, "server"))) <=
-			0
+		Bun.semver.order(target, await installedVersion()) <= 0
 	)
 		return false
 	let changed = false
 	await updateTransaction(async () => {
-		if (
-			Bun.semver.order(
-				target,
-				await packageVersion(join(LUCID_DIR, "server"))
-			) <= 0
-		)
-			return
+		if (Bun.semver.order(target, await installedVersion()) <= 0) return
 		await applyCheckout(await checkoutRelease(target), target, false)
 		changed = true
 	})
@@ -438,10 +435,7 @@ export async function updateInstalled() {
 	const latest = await latestRelease()
 	if (await updateToRelease(latest))
 		console.log(`Updated to Lucid ${latest}. Restart your clients.`)
-	else
-		console.log(
-			`Lucid ${await packageVersion(join(LUCID_DIR, "server"))} is up to date.`
-		)
+	else console.log(`Lucid ${await installedVersion()} is up to date.`)
 }
 
 // Bun runs the root postinstall for v0.6.5's unmodified "bun install --production".
@@ -478,7 +472,8 @@ export async function finishLegacyUpdate(packageDir: string) {
 	}
 	if (!candidates.length) {
 		// Never rewrite workspace manifests when an installed server is a symlink to a checkout.
-		if (!(await lstat(live)).isSymbolicLink()) await stampInstalledManifest()
+		if (!(await lstat(live)).isSymbolicLink())
+			await stampInstalledManifest(false)
 		return
 	}
 	if (candidates.length !== 1)
@@ -522,7 +517,7 @@ async function updateFromCheckout() {
 	if (!(await verifiedTag(checkout, target)) || changes.trim())
 		throw new Error(`Use a clean checkout of the published v${target} tag`)
 	await updateTransaction(async () => {
-		const current = await packageVersion(join(LUCID_DIR, "server"))
+		const current = await installedVersion()
 		if (Bun.semver.order(current, target) > 0)
 			throw new Error("Refusing to downgrade a newer installation")
 		await applyCheckout(checkout, target, false)
