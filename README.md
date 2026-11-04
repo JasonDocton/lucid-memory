@@ -255,6 +255,22 @@ For Claude Code, Lucid saves up to 2,000 Unicode characters from each nonempty f
 
 </details>
 
+### Updating an existing installation
+
+Close other Lucid sessions before upgrading. On macOS or Linux with a standard home path, run `lucid update`, then restart your clients. The updater installs the latest **published GitHub release**, keeps your current clients and database profiles, and refreshes their hooks. Hosts that share a database should upgrade together.
+
+**Moving from v0.6.5 on Windows, or from a home path containing spaces or shell metacharacters:** use the following one-time route instead of invoking the v0.6.5 updater. Its original executable uses unquoted Unix shell commands before it can load replacement code. From a directory of your choice:
+
+```shell
+git clone --depth 1 --branch v0.6.6 https://github.com/JasonDocton/lucid-memory.git lucid-v0.6.6
+cd lucid-v0.6.6
+bun run --no-env-file --no-install ./packages/lucid-server/src/upgrade.ts --from-checkout
+```
+
+This route verifies the tagged checkout and installs into the existing Lucid directory. From v0.6.6 onward, `lucid update` supports paths with spaces and uses the same staged update on Windows, macOS, and Linux. Keep old sessions closed until the update finishes. Enabled automatic updates also check published releases.
+
+For maintainers: v0.6.5 background updaters poll the private server manifest on `main`. Its source `version` stays pinned to `0.6.5` so they cannot launch the unsafe legacy update unattended. `lucidRelease` carries the actual release version, which is written to the installed manifest. Keep it aligned with the workspace and Cargo versions.
+
 <details>
 <summary><b>Multi-client configuration</b></summary>
 

@@ -19,8 +19,6 @@ import {
 	type LucidConfig,
 	resolveDbPath,
 } from "./database-path.ts"
-import { detectProvider } from "./embeddings.ts"
-import { LucidRetrieval } from "./retrieval.ts"
 import type { MemoryType } from "./storage.ts"
 
 const args = process.argv.slice(2)
@@ -31,9 +29,6 @@ function memoryOption(prefix: string): string | undefined {
 		.find((arg) => arg.startsWith(prefix))
 		?.slice(prefix.length)
 }
-
-// Top-level regex for version tag stripping
-const versionTagRegex = /^v/
 
 // biome-ignore lint/style/noProcessEnv: CLI requires client detection
 const LUCID_CLIENT = process.env.LUCID_CLIENT || "claude"
@@ -57,6 +52,12 @@ async function saveConfig(config: LucidConfig): Promise<void> {
 }
 
 async function main() {
+	if (command === "update") {
+		const { updateInstalled } = await import("./upgrade.ts")
+		await updateInstalled()
+		return
+	}
+
 	if (command === "config" && args[1] === "claude-responses") {
 		const mode = args[2]
 		if (mode !== "on" && mode !== "off")
@@ -72,6 +73,8 @@ async function main() {
 	const config = await loadConfig()
 	const dbPath = resolveDbPath(config, LUCID_CLIENT)
 
+	const { LucidRetrieval } = await import("./retrieval.ts")
+	const { detectProvider } = await import("./embeddings.ts")
 	const retrieval = new LucidRetrieval({ dbPath })
 
 	// Try to set up embeddings
@@ -614,158 +617,11 @@ Examples:
 			break
 		}
 
-		case "update": {
-			const REPO = "JasonDocton/lucid-memory"
-			// biome-ignore lint/style/noProcessEnv: CLI requires environment access
-			const LUCID_DIR = `${process.env.HOME}/.lucid`
-
-			console.log("🧠 Lucid Memory Update")
-			console.log("━━━━━━━━━━━━━━━━━━━━━━")
-			console.log("")
-
-			// Get current version
-			let currentVersion = "unknown"
-			try {
-				const pkgPath = `${LUCID_DIR}/server/package.json`
-				const pkg = await Bun.file(pkgPath).json()
-				currentVersion = pkg.version || "unknown"
-			} catch {
-				// Can't read current version
-			}
-			console.log(`Current version: ${currentVersion}`)
-
-			// Check latest version from GitHub
-			console.log("Checking for updates...")
-			try {
-				const response = await fetch(
-					`https://api.github.com/repos/${REPO}/releases/latest`,
-					{
-						headers: { Accept: "application/vnd.github.v3+json" },
-						signal: AbortSignal.timeout(10000),
-					}
-				)
-
-				if (!response.ok) {
-					// No releases yet, check package.json in main branch
-					const pkgResponse = await fetch(
-						`https://raw.githubusercontent.com/${REPO}/main/packages/lucid-server/package.json`,
-						{ signal: AbortSignal.timeout(10000) }
-					)
-					if (pkgResponse.ok) {
-						const remotePkg = await pkgResponse.json()
-						const latestVersion = remotePkg.version || "unknown"
-						console.log(`Latest version:  ${latestVersion}`)
-
-						if (currentVersion === latestVersion) {
-							console.log("")
-							console.log("✓ You're already on the latest version!")
-							break
-						}
-					}
-				} else {
-					const release = await response.json()
-					const latestVersion =
-						release.tag_name?.replace(versionTagRegex, "") || "unknown"
-					console.log(`Latest version:  ${latestVersion}`)
-
-					if (currentVersion === latestVersion) {
-						console.log("")
-						console.log("✓ You're already on the latest version!")
-						break
-					}
-				}
-
-				// Perform update
-				console.log("")
-				console.log("Downloading update...")
-
-				const { promisify } = await import("node:util")
-				const exec = promisify((await import("node:child_process")).exec)
-
-				// Create temp directory and clone
-				const tempDir = `${LUCID_DIR}/update-tmp-${Date.now()}`
-				await exec(`mkdir -p ${tempDir}`)
-
-				try {
-					// Clone latest
-					await exec(
-						`git clone --depth 1 https://github.com/${REPO}.git ${tempDir}/repo`,
-						{ timeout: 60000 }
-					)
-
-					// Backup current server (preserve symlinks and configs)
-					const backupDir = `${LUCID_DIR}/server-backup-${Date.now()}`
-					await exec(`mv ${LUCID_DIR}/server ${backupDir}`)
-
-					// Copy new server
-					await exec(
-						`cp -r ${tempDir}/repo/packages/lucid-server ${LUCID_DIR}/server`
-					)
-
-					// Copy new native package if exists
-					if (
-						await Bun.file(`${tempDir}/repo/packages/lucid-native`).exists()
-					) {
-						await exec(`rm -rf ${LUCID_DIR}/native`)
-						await exec(
-							`cp -r ${tempDir}/repo/packages/lucid-native ${LUCID_DIR}/native`
-						)
-					}
-
-					// Update package.json to point to local native
-					const serverPkgPath = `${LUCID_DIR}/server/package.json`
-					const serverPkg = await Bun.file(serverPkgPath).json()
-					serverPkg.dependencies = serverPkg.dependencies || {}
-					serverPkg.dependencies["@lucid-memory/native"] = "file:../native"
-					await Bun.write(serverPkgPath, JSON.stringify(serverPkg, null, 2))
-
-					// Install dependencies
-					console.log("Installing dependencies...")
-					await exec(`cd ${LUCID_DIR}/server && bun install --production`, {
-						timeout: 120000,
-					})
-
-					// Clean up
-					await exec(`rm -rf ${tempDir}`)
-					await exec(`rm -rf ${backupDir}`)
-
-					console.log("")
-					console.log("✓ Update complete!")
-					console.log("")
-					console.log("Please restart Claude Code to use the new version.")
-				} catch (updateError) {
-					// Restore backup if exists
-					const backups = await exec(
-						`ls -d ${LUCID_DIR}/server-backup-* 2>/dev/null || true`
-					)
-					if (backups.stdout.trim()) {
-						const latestBackup = backups.stdout.trim().split("\n").pop()
-						await exec(`rm -rf ${LUCID_DIR}/server`)
-						await exec(`mv ${latestBackup} ${LUCID_DIR}/server`)
-					}
-					await exec(`rm -rf ${tempDir}`)
-					throw updateError
-				}
-			} catch (error) {
-				console.error(
-					"Update failed:",
-					error instanceof Error ? error.message : String(error)
-				)
-				console.log("")
-				console.log("You can update manually by running:")
-				console.log("  curl -fsSL https://lucidmemory.dev/install | bash")
-				process.exit(1)
-			}
-			break
-		}
-
 		case "version": {
-			// biome-ignore lint/style/noProcessEnv: CLI requires environment access
-			const LUCID_DIR = `${process.env.HOME}/.lucid`
 			try {
 				const pkgPath = `${LUCID_DIR}/server/package.json`
 				const pkg = await Bun.file(pkgPath).json()
-				console.log(pkg.version || "unknown")
+				console.log(pkg.lucidRelease ?? pkg.version ?? "unknown")
 			} catch {
 				console.log("unknown")
 			}

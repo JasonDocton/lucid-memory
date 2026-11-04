@@ -7,6 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  WHISPER_DONT_GENERATE_BINDINGS: "1"
 
 jobs:
   publish:
@@ -31,13 +32,14 @@ jobs:
           echo "Version verified: $CARGO_VERSION"
 
       - name: Run tests
-        run: cargo test --features transcription
+        run: cargo test --locked --features transcription
 
       - name: Check if version exists on crates.io
         id: check_version
         run: |
           VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          if curl -s "https://crates.io/api/v1/crates/lucid-core/$VERSION" | grep -q '"version":"'"$VERSION"'"'; then
+          curl -fsSL --retry 4 https://index.crates.io/lu/ci/lucid-core -o "$RUNNER_TEMP/lucid-index.jsonl"
+          if jq --slurp --exit-status --arg v "$VERSION" 'any(.[]; .vers == $v)' "$RUNNER_TEMP/lucid-index.jsonl" > /dev/null; then
             echo "Version $VERSION already exists on crates.io, skipping publish"
             echo "skip=true" >> $GITHUB_OUTPUT
           else
@@ -49,4 +51,4 @@ jobs:
         if: steps.check_version.outputs.skip != 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p lucid-core
+        run: cargo publish --locked -p lucid-core

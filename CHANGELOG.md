@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6]
+
+- Configure Claude Code, Codex, or both directly from the installer client selection. Preserve existing hooks, notifiers and private database profiles.
+- Record assistant replies as conversations, separately from user prompts.
+- Bound native BGE inputs to the model's 512-position limit, including special tokens and batch padding.
+- Verify OpenAI-compatible embedding endpoints and isolate cached vectors by model and width. Update hosts sharing a database together.
+- Upgrade from installed v0.6.5 package paths. New updaters fetch the published release tag and restore enabled integrations without changing memory databases.
+
 ## [0.6.0] - 2026-02-15
 
 ### Added

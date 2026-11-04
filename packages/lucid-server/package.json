@@ -1,6 +1,8 @@
 {
 	"name": "lucid-server",
+	"private": true,
 	"version": "0.6.5",
+	"lucidRelease": "0.6.6",
 	"description": "MCP server for Lucid Memory - AI coding assistants that actually remember",
 	"type": "module",
 	"main": "src/index.ts",
@@ -11,11 +13,12 @@
 	"scripts": {
 		"start": "bun run src/server.ts",
 		"test": "bun test",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"postinstall": "bun run --no-env-file --no-install scripts/legacy-update.ts"
 	},
 	"dependencies": {
-		"@lucid-memory/native": "file:../lucid-native",
-		"@lucid-memory/perception": "file:../lucid-perception",
+		"@lucid-memory/native": "file:../native",
+		"@lucid-memory/perception": "file:../perception",
 		"@modelcontextprotocol/sdk": "^1.0.0",
 		"zod": "^3.23.0"
 	},

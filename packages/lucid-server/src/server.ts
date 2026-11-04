@@ -244,7 +244,8 @@ function startBackgroundSessionPruneProcessor(): void {
 // === Create MCP Server ===
 const server = new McpServer({
 	name: "lucid-memory",
-	version: "0.1.0",
+	version: (await Bun.file(`${import.meta.dir}/../package.json`).json())
+		.lucidRelease,
 	// @ts-expect-error - MCP SDK types don't include capabilities but runtime accepts it
 	capabilities: {
 		tools: {},
@@ -1935,143 +1936,24 @@ server.tool(
  * Otherwise, logs a message if a newer version is available.
  */
 async function checkForUpdates(): Promise<void> {
-	const REPO = "JasonDocton/lucid-memory"
-	// biome-ignore lint/style/noProcessEnv: Server requires environment access for user home directory
-	const LUCID_DIR = `${process.env.HOME}/.lucid`
-
 	try {
-		// Check if auto-update is enabled
-		let autoUpdateEnabled = false
-		try {
-			const configPath = `${LUCID_DIR}/config.json`
-			const config = await Bun.file(configPath).json()
-			autoUpdateEnabled = config.autoUpdate === true
-		} catch {
-			// No config file, default to manual updates
-		}
-
-		// Get current version
-		let currentVersion = "0.0.0"
-		try {
-			const pkgPath = `${LUCID_DIR}/server/package.json`
-			const pkg = await Bun.file(pkgPath).json()
-			currentVersion = pkg.version || "0.0.0"
-		} catch {
-			return // Can't determine current version
-		}
-
-		// Check latest version from GitHub (with short timeout)
-		const pkgResponse = await fetch(
-			`https://raw.githubusercontent.com/${REPO}/main/packages/lucid-server/package.json`,
-			{ signal: AbortSignal.timeout(5000) }
-		)
-
-		if (pkgResponse.ok) {
-			const remotePkg = await pkgResponse.json()
-			const latestVersion = remotePkg.version || "0.0.0"
-
-			// Simple version comparison (works for semver)
-			if (latestVersion !== currentVersion && latestVersion > currentVersion) {
-				if (autoUpdateEnabled) {
-					console.error(
-						`[lucid] ⬆️  Auto-updating: ${currentVersion} → ${latestVersion}`
-					)
-					await performAutoUpdate(REPO, LUCID_DIR)
-				} else {
-					console.error(
-						`[lucid] ⬆️  Update available: ${currentVersion} → ${latestVersion}`
-					)
-					console.error("[lucid]    Run 'lucid update' to install")
-				}
-			}
-		}
-	} catch {
-		// Silently ignore update check failures - not critical
-	}
-}
-
-/**
- * Perform automatic update in the background.
- */
-async function performAutoUpdate(
-	repo: string,
-	lucidDir: string
-): Promise<void> {
-	try {
-		const { promisify } = await import("node:util")
-		const exec = promisify((await import("node:child_process")).exec)
-
-		const tempDir = `${lucidDir}/update-tmp-${Date.now()}`
-		await exec(`mkdir -p ${tempDir}`)
-
-		try {
-			// Clone latest
-			await exec(
-				`git clone --depth 1 https://github.com/${repo}.git ${tempDir}/repo`,
-				{ timeout: 60000 }
+		const { latestRelease, updateToRelease } = await import("./upgrade.ts")
+		const current = (await Bun.file(`${LUCID_DIR}/server/package.json`).json())
+			.version
+		const latest = await latestRelease()
+		if (Bun.semver.order(latest, current) <= 0) return
+		if ((await loadConfig()).autoUpdate === true) {
+			await updateToRelease(latest)
+			console.error(`[lucid] Updated to ${latest}. Restart your clients.`)
+		} else
+			console.error(
+				`[lucid] Lucid ${latest} is available. Run 'lucid update' to install.`
 			)
-
-			// Backup current server
-			const backupDir = `${lucidDir}/server-backup-${Date.now()}`
-			await exec(`mv ${lucidDir}/server ${backupDir}`)
-
-			// Copy new server
-			await exec(
-				`cp -r ${tempDir}/repo/packages/lucid-server ${lucidDir}/server`
-			)
-
-			// Copy new native package if exists
-			const nativeExists = await Bun.file(
-				`${tempDir}/repo/packages/lucid-native/package.json`
-			).exists()
-			if (nativeExists) {
-				await exec(`rm -rf ${lucidDir}/native`)
-				await exec(
-					`cp -r ${tempDir}/repo/packages/lucid-native ${lucidDir}/native`
-				)
-			}
-
-			// Update package.json to point to local native
-			const serverPkgPath = `${lucidDir}/server/package.json`
-			const serverPkg = await Bun.file(serverPkgPath).json()
-			serverPkg.dependencies = serverPkg.dependencies || {}
-			serverPkg.dependencies["@lucid-memory/native"] = "file:../native"
-			await Bun.write(serverPkgPath, JSON.stringify(serverPkg, null, 2))
-
-			// Install dependencies
-			await exec(`cd ${lucidDir}/server && bun install --production`, {
-				timeout: 120000,
-			})
-
-			// Clean up
-			await exec(`rm -rf ${tempDir}`)
-			await exec(`rm -rf ${backupDir}`)
-
-			console.error("[lucid] ✓ Auto-update complete!")
-			console.error("[lucid]   Restart Claude Code to use the new version")
-		} catch (updateError) {
-			// Restore backup if exists
-			try {
-				const { stdout } = await exec(
-					`ls -d ${lucidDir}/server-backup-* 2>/dev/null || true`
-				)
-				if (stdout.trim()) {
-					const latestBackup = stdout.trim().split("\n").pop()
-					await exec(`rm -rf ${lucidDir}/server`)
-					await exec(`mv ${latestBackup} ${lucidDir}/server`)
-				}
-			} catch {
-				// Ignore restore errors
-			}
-			await exec(`rm -rf ${tempDir}`)
-			throw updateError
-		}
 	} catch (error) {
 		console.error(
-			"[lucid] ⚠️  Auto-update failed:",
+			"[lucid] Update check failed:",
 			error instanceof Error ? error.message : String(error)
 		)
-		console.error("[lucid]    Run 'lucid update' manually to retry")
 	}
 }
 

@@ -212,7 +212,8 @@ async function editConfig(
 	location: string,
 	install: boolean,
 	edit: (text: string) => string | Promise<string>,
-	checkOnly = false
+	checkOnly = false,
+	write = replaceFile
 ) {
 	const entry = await lstat(location).catch((error: NodeJS.ErrnoException) => {
 		if (error.code !== "ENOENT") throw error
@@ -225,9 +226,9 @@ async function editConfig(
 	const mode = entry ? (await stat(path)).mode & 0o777 : 0o600
 	if (install && old !== undefined) {
 		const backup = `${path}.backup`
-		await replaceFile(backup, old, await readOptional(backup), mode)
+		await write(backup, old, await readOptional(backup), mode)
 	}
-	await replaceFile(path, updated, old, mode)
+	await write(path, updated, old, mode)
 }
 
 function serverCommand() {
@@ -274,10 +275,11 @@ function editClaudeMcp(text: string, install: boolean) {
 	return `${JSON.stringify(config, null, 2)}\n`
 }
 
-async function configureClient(
+export async function configureClient(
 	client: string,
 	mode: "install" | "uninstall",
-	checkOnly = false
+	checkOnly = false,
+	write = replaceFile
 ) {
 	const install = mode === "install"
 	if (client === "claude") {
@@ -285,15 +287,17 @@ async function configureClient(
 			join(env.CLAUDE_CONFIG_DIR || homedir(), ".claude.json"),
 			install,
 			(text) => editClaudeMcp(text, install),
-			checkOnly
+			checkOnly,
+			write
 		)
-		await configureClaudeHook(mode, checkOnly)
+		await configureClaudeHook(mode, checkOnly, write)
 	} else if (client === "codex") {
 		await editConfig(
 			join(env.CODEX_HOME || join(homedir(), ".codex"), "config.toml"),
 			install,
 			(text) => editCodexConfig(text, install),
-			checkOnly
+			checkOnly,
+			write
 		)
 	} else throw new Error("Expected claude or codex")
 }

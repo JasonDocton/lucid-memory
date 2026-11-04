@@ -105,7 +105,11 @@ function updateHandlers(
 	else if (groups.length) delete hooks[event]
 }
 
-export async function configureClaudeHook(action: Action, checkOnly = false) {
+export async function configureClaudeHook(
+	action: Action,
+	checkOnly = false,
+	write = replaceFile
+) {
 	const location = join(
 		// biome-ignore lint/style/noProcessEnv: Claude honors a custom configuration directory.
 		process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"),
@@ -178,14 +182,14 @@ export async function configureClaudeHook(action: Action, checkOnly = false) {
 		const source = await readFile(import.meta.path, "utf8")
 		const existing = await readOptional(installedHook)
 		if (!checkOnly && source !== existing)
-			await replaceFile(installedHook, source, existing, 0o600)
+			await write(installedHook, source, existing, 0o600)
 	}
 	updateHandlers(hooks, "Stop", stop, enable)
 	if (Object.keys(hooks).length || config.hooks !== undefined)
 		config.hooks = hooks
 	if (object(plugins) && priorOptIn) plugins[oldPlugin] = false
 	if (checkOnly || JSON.stringify(config) === original) return
-	await replaceFile(
+	await write(
 		path,
 		`${JSON.stringify(config, null, 2)}\n`,
 		previous,
