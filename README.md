@@ -247,9 +247,7 @@ Restart Lucid after changing a serving model. When the endpoint reports a differ
 
 Selecting **Claude Code** registers Lucid's MCP server, `UserPromptSubmit`, and `Stop`. Selecting **Codex** registers Lucid's MCP server and turn-completion notifier. Select **both** (`1 2`) to configure both clients in the same installation. Start new client sessions after installation. The database choice determines whether they share memories. If Codex already runs a notification command, Lucid passes it the original event as well.
 
-**Existing v0.6.5 installations without the new installer.** Close Lucid clients and run `bash scripts/upgrade-v065-capture.sh` from a full checkout (Git Bash on Windows). It checks the five server source files, enables the direct hook, and preserves database and profile settings. Use `--rollback` to remove the hook and restore the stock files. The installer also migrates the previous user-level Claude response hook.
-
-The v0.6.5 migration installs response capture only. It keeps the v0.6.5 embedding cache code. Before a newer server upgrades a shared database for endpoint-specific vectors, stop and update **every** client that uses that database. A stock or capture-only v0.6.5 server can discard other models' cached vectors when it opens the upgraded database. Use separate databases if clients must run different versions during rollout.
+For existing installations, follow **Updating an existing installation** below. The upgrade keeps the previously selected clients and database profiles and registers their capture hooks automatically.
 
 For Claude Code, Lucid saves up to 2,000 Unicode characters from each nonempty final reply in the active Claude database and project. Replies are tagged as assistant conversations and can be retrieved in later sessions. Lucid's configured embedding provider may process this text. Repeated delivery of the same reply for the same prompt is ignored. A Stop hook can ask Claude to continue, so a single user prompt can produce several replies. Capture requires a Stop payload with a session ID, prompt or turn ID, working directory, and final message. Use Claude Code 2.1.258 or later for the tested hook fields. Configless installations use the shared default. For named profiles, specify an absolute or home-relative database path.
 
@@ -257,7 +255,7 @@ For Claude Code, Lucid saves up to 2,000 Unicode characters from each nonempty f
 
 ### Updating an existing installation
 
-Close other Lucid sessions before upgrading. On macOS or Linux with a standard home path, run `lucid update`, then restart your clients. The updater installs the latest **published GitHub release**, keeps your current clients and database profiles, and refreshes their hooks. Hosts that share a database should upgrade together.
+Close other Lucid sessions before upgrading. On macOS or Linux with a standard home path, run `lucid update`, then restart your clients. The updater installs the latest **published GitHub release**, keeps your current clients and database profiles, and refreshes their hooks. Hosts that share a database should upgrade together. A stock or capture-only v0.6.5 host can remove another model's cached vectors when sharing a database with newer versions.
 
 **Moving from v0.6.5 on Windows, or from a home path containing spaces or shell metacharacters:** use the following one-time route instead of invoking the v0.6.5 updater. Its original executable uses unquoted Unix shell commands before it can load replacement code. From a directory of your choice:
 
@@ -267,7 +265,7 @@ cd lucid-v0.6.6
 bun run --no-env-file --no-install ./packages/lucid-server/src/upgrade.ts --from-checkout
 ```
 
-This route verifies the tagged checkout and installs into the existing Lucid directory. From v0.6.6 onward, `lucid update` supports paths with spaces and uses the same staged update on Windows, macOS, and Linux. Keep old sessions closed until the update finishes. Enabled automatic updates also check published releases.
+This route verifies the tagged checkout and installs into the existing Lucid directory. From v0.6.6 onward, `lucid update` supports paths with spaces and uses the same staged update on Windows, macOS, and Linux. Keep old sessions closed until the update finishes. If an upgrade is interrupted and the installed command cannot start, the same tagged-checkout command recovers the saved packages before retrying. Enabled automatic updates also check published releases.
 
 For maintainers: v0.6.5 background updaters poll the private server manifest on `main`. Its source `version` stays pinned to `0.6.5` so they cannot launch the unsafe legacy update unattended. `lucidRelease` carries the actual release version, which is written to the installed manifest. Keep it aligned with the workspace and Cargo versions.
 
