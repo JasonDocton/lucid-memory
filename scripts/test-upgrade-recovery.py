@@ -2,6 +2,7 @@
 """Test the tagged-checkout route, rollback and subsequent installed CLI on Windows/POSIX."""
 
 import io
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -131,7 +132,7 @@ def exercise(root):
             args == ("update",)
             and (base / "bin" / ("lucid.cmd" if os.name == "nt" else "lucid")).exists()
         ):
-            env["BUN_OPTIONS"] = "--preload=" + json.dumps(str(preload))
+            env["BUN_OPTIONS"] = "--preload=" + preload.as_posix()
             cmd = (
                 [
                     os.environ.get("COMSPEC", "cmd.exe"),
@@ -166,7 +167,7 @@ def exercise(root):
     dbpath = home / "DB space/private.db"
 
     def memories():
-        with sqlite3.connect(dbpath) as db:
+        with closing(sqlite3.connect(dbpath)) as db:
             return db.execute("SELECT id,content,project_id FROM memories").fetchall()
 
     oldrows = memories()
@@ -223,5 +224,5 @@ def exercise(root):
 
 
 if __name__ == "__main__":
-    with tempfile.TemporaryDirectory(prefix="lucid release recovery ") as name:
+    with tempfile.TemporaryDirectory(prefix="lucid-release-recovery-") as name:
         exercise(Path(name))

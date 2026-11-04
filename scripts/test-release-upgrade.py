@@ -2,6 +2,7 @@
 """Exercise the *released* installer and CLI against a local Git remote and release response."""
 
 import hashlib
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -78,7 +79,7 @@ def install(script, env, answers):
 
 
 def rows(path):
-    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+    with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
         return db.execute(
             "SELECT id,type,content,project_id,tags FROM memories ORDER BY id"
         ).fetchall()
