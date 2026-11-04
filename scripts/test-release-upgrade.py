@@ -10,6 +10,7 @@ import pty
 import select
 import shutil
 import sqlite3
+import struct
 import subprocess
 import tempfile
 import time
@@ -213,6 +214,10 @@ def exercise(root):
                 {**env, "LUCID_CLIENT": client},
             )
             assert len(rows(paths[client])) == 1
+            with closing(sqlite3.connect(paths[client])) as db:
+                db.execute("INSERT INTO embeddings(memory_id,vector,model) VALUES(?,?,?)",
+                           (rows(paths[client])[0][0], struct.pack("<2f", 1.0, 0.0), "fixture-encoder"))
+                db.commit()
         (base / ".env").write_text("EXAMPLE=preserved\n")
         states.append(
             (
@@ -351,6 +356,11 @@ def exercise(root):
             for other in clients:
                 if other != c:
                     assert all(r[2] != reply for r in rows(paths[other]))
+        for c in clients:
+            with closing(sqlite3.connect(paths[c])) as db:
+                cached=db.execute("SELECT vector FROM embeddings WHERE memory_id=? AND model=?",
+                                  (oldrows[c][0][0], "fixture-encoder")).fetchall()
+                assert cached==[(struct.pack("<2f",1.0,0.0),)]
         assert "up to date" in run([cli, "update"], project, env)
         print(
             f"PASS {name}: stock {OLD} installer and lucid update -> {NEW}; original IDs, profiles, registrations and subsequent captures verified.",
