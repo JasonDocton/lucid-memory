@@ -194,11 +194,11 @@ def exercise(root):
     # A failure in the second client occurs after Claude settings were changed.
     failed_backup = Path(str(toml) + ".backup")
     failed_backup.mkdir()
-    recover(False)
+    failed = recover(False)
     assert (
         settings.read_bytes() == original
         and not (base / "server/src/upgrade.ts").exists()
-    )
+    ), failed
     assert json.loads(manifest.read_text())["version"] == "0.6.5"
     assert memories() == oldrows and config.read_bytes() == snapshot
     failed_backup.rmdir()

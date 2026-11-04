@@ -95,6 +95,9 @@ async function allowedJournalPaths() {
 		join(env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "settings.json"),
 		join(env.CODEX_HOME || join(homedir(), ".codex"), "config.toml"),
 	]) {
+		// New files may have been journaled before realpath could resolve a home-directory alias.
+		allowed.add(resolve(config))
+		allowed.add(`${resolve(config)}.backup`)
 		const path = await realpath(config).catch(
 			(error: NodeJS.ErrnoException) => {
 				if (error.code !== "ENOENT") throw error
