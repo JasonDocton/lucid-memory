@@ -15,7 +15,9 @@ import {
 	symlink,
 	writeFile,
 } from "node:fs/promises"
+import { homedir } from "node:os"
 import { basename, join, relative, resolve } from "node:path"
+import { env } from "node:process"
 import { promisify } from "node:util"
 import { readOptional, replaceFile } from "./claude-hook.ts"
 import { configureClient } from "./client-setup.ts"
@@ -80,6 +82,26 @@ interface FileUndo {
 }
 const undoFile = join(work, "files.json")
 
+async function allowedJournalPaths() {
+	const allowed = new Set<string>(
+		["user-prompt-submit.sh", "user-prompt-submit.ps1", "claude-stop.ts"].map(
+			(name) => join(LUCID_DIR, "hooks", name)
+		)
+	)
+	for (const config of [
+		join(env.CLAUDE_CONFIG_DIR || homedir(), ".claude.json"),
+		join(env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "settings.json"),
+		join(env.CODEX_HOME || join(homedir(), ".codex"), "config.toml"),
+	]) {
+		const path = (await exists(config))
+			? await realpath(config)
+			: resolve(config)
+		allowed.add(path)
+		allowed.add(`${path}.backup`)
+	}
+	return allowed
+}
+
 async function rollback() {
 	if (
 		!(await lstat(work)).isDirectory() ||
@@ -89,9 +111,27 @@ async function rollback() {
 			`Unrecognized update workspace at ${work}; refusing to remove it`
 		)
 	const journal: FileUndo[] = JSON.parse((await readOptional(undoFile)) ?? "[]")
+	const allowed = await allowedJournalPaths()
+	for (const entry of journal) {
+		if (
+			!allowed.has(entry.path) ||
+			typeof entry.afterHash !== "string" ||
+			!Number.isInteger(entry.mode) ||
+			entry.mode < 0 ||
+			entry.mode > 0o777 ||
+			(entry.before !== undefined && typeof entry.before !== "string")
+		)
+			throw new Error(
+				`Invalid recovery journal at ${work}; leaving files untouched`
+			)
+	}
 	for (const entry of journal.reverse()) {
 		const now = await readOptional(entry.path)
-		if (now === entry.before) continue
+		if (now === entry.before) {
+			if (now !== undefined && entry.afterHash === hash(now))
+				await chmod(entry.path, entry.mode)
+			continue
+		}
 		if (now === undefined || hash(now) !== entry.afterHash)
 			throw new Error(
 				`File changed during recovery; retained backup at ${work}: ${entry.path}`
@@ -143,8 +183,11 @@ async function updateTransaction(operation: () => Promise<void>) {
 
 async function activate(name: (typeof packages)[number]) {
 	const dst = join(LUCID_DIR, name)
-	if (await exists(dst)) await rename(dst, join(work, "old", name))
-	else await writeFile(join(work, "old", `${name}.absent`), "")
+	if (await exists(dst)) {
+		if (!(await lstat(dst)).isDirectory() || (await exists(join(dst, ".git"))))
+			throw new Error(`Refusing to replace a nonstandard Lucid package: ${dst}`)
+		await rename(dst, join(work, "old", name))
+	} else await writeFile(join(work, "old", `${name}.absent`), "")
 	await rename(join(work, "new", name), dst)
 }
 
@@ -154,10 +197,23 @@ async function writeWithUndo(
 	previous: string | undefined,
 	mode: number
 ) {
-	if (contents === previous) return
+	const current = (await exists(path)) ? await lstat(path) : undefined
+	if (current && !current.isFile())
+		throw new Error(`Refusing to replace non-file: ${path}`)
+	const originalMode = current ? current.mode & 0o777 : mode
+	if (
+		contents === previous &&
+		(originalMode === mode || process.platform === "win32")
+	)
+		return
 	const journal = await readOptional(undoFile)
 	const records: FileUndo[] = JSON.parse(journal ?? "[]")
-	records.push({ path, before: previous, afterHash: hash(contents), mode })
+	records.push({
+		path,
+		before: previous,
+		afterHash: hash(contents),
+		mode: originalMode,
+	})
 	await replaceFile(undoFile, JSON.stringify(records), journal, 0o600)
 	await replaceFile(path, contents, previous, mode)
 }
@@ -208,7 +264,6 @@ async function refreshClients() {
 			"utf8"
 		)
 		await writeWithUndo(target, source, await readOptional(target), 0o755)
-		if (process.platform !== "win32") await chmod(target, 0o755)
 	}
 	for (const client of clients) await configureClient(client, "install", true)
 	for (const client of clients)

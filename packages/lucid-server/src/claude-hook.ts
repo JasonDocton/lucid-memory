@@ -1,6 +1,7 @@
 // This file also runs from ~/.lucid/hooks on v0.6.5 installations.
 import { randomUUID } from "node:crypto"
 import {
+	chmod,
 	link,
 	lstat,
 	mkdir,
@@ -52,6 +53,7 @@ export async function replaceFile(
 	await mkdir(dirname(path), { recursive: true })
 	try {
 		await writeFile(temporary, contents, { flag: "wx", mode })
+		if (process.platform !== "win32") await chmod(temporary, mode)
 		if ((await readOptional(path)) !== previous)
 			throw new Error(`File changed during update: ${path}`)
 		if (previous === undefined) await link(temporary, path)
