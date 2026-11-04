@@ -133,6 +133,7 @@ async function rollback() {
 				`Invalid recovery journal at ${work}; leaving files untouched`
 			)
 	}
+	const conflicts: string[] = []
 	for (const entry of journal.reverse()) {
 		const now = await readOptional(entry.path)
 		if (now === entry.before) {
@@ -140,10 +141,10 @@ async function rollback() {
 				await chmod(entry.path, entry.mode)
 			continue
 		}
-		if (now === undefined || hash(now) !== entry.afterHash)
-			throw new Error(
-				`File changed during recovery; retained backup at ${work}: ${entry.path}`
-			)
+		if (now === undefined || hash(now) !== entry.afterHash) {
+			conflicts.push(entry.path)
+			continue
+		}
 		if (entry.before === undefined) await rm(entry.path)
 		else await replaceFile(entry.path, entry.before, now, entry.mode)
 	}
@@ -157,6 +158,10 @@ async function rollback() {
 			await rm(dst, { force: true, recursive: true })
 		}
 	}
+	if (conflicts.length)
+		throw new Error(
+			`Concurrent settings edits were preserved. Package backups restored; review ${work} before retrying: ${conflicts.join(", ")}`
+		)
 	await rm(work, { recursive: true, force: true })
 }
 

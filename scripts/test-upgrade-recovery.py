@@ -179,6 +179,13 @@ def exercise(root):
             "run", "--no-env-file", "--no-install", program, "--from-checkout", ok=ok
         )
 
+    # A simultaneous updater holds a process-scoped lock, not a memory database lock.
+    with closing(sqlite3.connect(base / ".update-lock.sqlite")) as lock:
+        lock.execute("BEGIN EXCLUSIVE")
+        assert "locked" in recover(False).lower()
+        assert memories() == oldrows and config.read_bytes() == snapshot
+        lock.rollback()
+
     # Unknown directories are never cleared; an interrupted real swap must be recoverable.
     work = base / ".upgrade-work"
     work.mkdir()
