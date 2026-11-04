@@ -87,7 +87,7 @@ def exercise(root):
         stub.chmod(0o755)
     project=root/"sample project"
     project.mkdir()
-    preload=project/"release.ts"
+    preload=root/"fixture-release.ts"
     preload.write_text("""globalThis.fetch = async (url) => {
         if (String(url).endsWith('/releases/latest')) return Response.json({tag_name:process.env.TEST_RELEASE});
         if (String(url).endsWith('/api/tags')) return Response.json({models:[]});

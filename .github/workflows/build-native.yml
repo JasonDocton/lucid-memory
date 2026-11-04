@@ -16,10 +16,11 @@ on:
       - 'packages/lucid-perception/**'
   workflow_dispatch:  # Manual trigger
   release:
-    types: [created]
+    types: [published]
 
 jobs:
   build-native:
+    if: github.event_name != 'release'
     strategy:
       fail-fast: false
       matrix:
@@ -114,6 +115,7 @@ jobs:
           if-no-files-found: error
 
   build-perception:
+    if: github.event_name != 'release'
     strategy:
       fail-fast: false
       matrix:
@@ -257,28 +259,23 @@ jobs:
 
   # Attach binaries to releases
   release:
-    needs: [build-native, build-perception]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     permissions:
       contents: write
 
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
+      - uses: actions/checkout@v4
 
-      - name: Prepare release files
+      - name: Package tested tag binaries
         run: |
-          mkdir -p release
-
-          # Each artifact contains exactly one .node file
-          for dir in artifacts/native-*; do
-            cp "$dir"/*.node "release/"
+          set -euo pipefail
+          mkdir release
+          for platform in darwin-arm64 linux-arm64-gnu linux-x64-gnu win32-x64-msvc; do
+            cp "packages/lucid-native/lucid-native.${platform}.node" release/
           done
-          for dir in artifacts/perception-*; do
-            cp "$dir"/*.node "release/"
+          for platform in darwin-arm64 darwin-x64 linux-x64-gnu win32-x64-msvc; do
+            cp "packages/lucid-perception/lucid-perception.${platform}.node" release/
           done
 
           echo "=== Release files ==="
