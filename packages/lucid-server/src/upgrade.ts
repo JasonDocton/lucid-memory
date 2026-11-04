@@ -408,6 +408,10 @@ export async function finishLegacyUpdate(packageDir: string) {
 	if (!checkout) return
 	// The legacy updater clones main. If main moved past the release, install the tag instead.
 	const published = await latestRelease()
+	if (Bun.semver.order(published, "0.6.5") <= 0)
+		throw new Error(
+			"No supported upgrade has been published for this installation"
+		)
 	await updateTransaction(async () => {
 		const exact =
 			target === published &&

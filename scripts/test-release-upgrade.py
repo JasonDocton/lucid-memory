@@ -109,8 +109,8 @@ def exercise(root):
         prompts=[("Continue with installation? [Y/n]: ","y"),("OpenAI API key (press Enter to skip): ",""),("Choice: ",choice)]
         if len(clients)>1: prompts.append(("Choice [1]: ","2"))
         prompts.append(("Enable automatic updates? [Y/n]: ","n"))
-        # The postinstall subprocess independently checks the published release.
-        (home/".bunfig.toml").write_text("preload = ["+json.dumps(str(preload))+"]\n")
+        # Mock only release discovery, including in Bun's postinstall subprocess.
+        env["BUN_OPTIONS"] = "--preload="+str(preload)
         install(installer,env,prompts)
         base=home/".lucid"
         cli=str(base/"bin/lucid")
@@ -131,9 +131,29 @@ def exercise(root):
         states.append((name,clients,env,cli,base,paths,{c:rows(db) for c,db in paths.items()},(base/"config.json").read_bytes()))
     # The release is not published yet. Only Git discovery and release metadata are redirected.
     git("update-ref","refs/heads/main",new_sha,cwd=remote)
+    ahead=root/"ahead"
+    git("clone","--quiet","--shared",str(REPO),str(ahead))
+    marker=ahead/"packages/lucid-server/unpublished-marker"
+    marker.write_text("main only")
+    git("add",str(marker),cwd=ahead)
+    git("-c","user.name=Fixture","-c","user.email=fixture@localhost","-c","commit.gpgsign=false","commit","-qm","Later main change",cwd=ahead)
     for name, clients,env,cli,base,paths,oldrows,oldconfig in states:
         env={**env,"TEST_RELEASE":NEW}
+        if name!="claude":
+            git("push","--quiet",str(remote),"HEAD:refs/heads/main",cwd=ahead)
+        if name=="both":
+            toml=base.parent/".codex/config.toml"; original=toml.read_bytes()
+            binary=next((base/"native").glob("*.node"))
+            baseline=[digest(q) for q in [base/"server/src/cli.ts",binary,base.parent/".claude/settings.json"]]
+            toml.write_text("notify = [broken")
+            assert "Update failed:" in run([cli,"update"],project,env,ok=False)
+            assert (base/"config.json").read_bytes()==oldconfig
+            assert baseline==[digest(q) for q in [base/"server/src/cli.ts",binary,base.parent/".claude/settings.json"]]
+            assert toml.read_text()=="notify = [broken"
+            assert all(rows(paths[c])==oldrows[c] for c in clients)
+            toml.write_bytes(original)
         assert "Update complete!" in run([cli,"update"],project,env)
+        assert not (base/"server/unpublished-marker").exists()
         assert json.loads((base/"server/package.json").read_text())["version"]==VERSION
         assert (base/"config.json").read_bytes()==oldconfig
         assert (base/".env").read_text()=="EXAMPLE=preserved\n"
