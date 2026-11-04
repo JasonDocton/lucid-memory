@@ -328,22 +328,24 @@ export async function finishLegacyUpdate(packageDir: string) {
 		return
 	const candidates: string[] = []
 	const target = await packageVersion(live)
-	for (const entry of await readdir(LUCID_DIR)) {
-		const suffix = legacyTemp.exec(entry)?.[1]
-		if (!suffix) continue
-		const backup = join(LUCID_DIR, `server-backup-${suffix}`, "package.json")
+	const entries = await readdir(LUCID_DIR)
+	// v0.6.5 calls Date.now() separately for its checkout and subsequent backup.
+	const backups = []
+	for (const entry of entries) {
+		const match = /^server-backup-(\d+)$/.exec(entry)
+		if (!match) continue
+		const manifest = await readOptional(join(LUCID_DIR, entry, "package.json"))
+		if (manifest && JSON.parse(manifest).version === "0.6.5")
+			backups.push(Number(match[1]))
+	}
+	for (const entry of entries) {
+		const start = legacyTemp.exec(entry)?.[1]
+		if (!start || !backups.some((time) => time >= Number(start))) continue
 		const checkout = join(LUCID_DIR, entry, "repo")
+		const source = join(checkout, "packages", "lucid-server")
 		if (
-			!(await exists(backup)) ||
-			!(await exists(
-				join(checkout, "packages", "lucid-server", "package.json")
-			))
-		)
-			continue
-		if (
-			(await Bun.file(backup).json()).version === "0.6.5" &&
-			(await packageVersion(join(checkout, "packages", "lucid-server"))) ===
-				target
+			(await exists(join(source, "package.json"))) &&
+			(await packageVersion(source)) === target
 		)
 			candidates.push(checkout)
 	}

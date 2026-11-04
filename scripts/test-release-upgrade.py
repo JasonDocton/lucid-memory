@@ -139,7 +139,7 @@ def exercise(root):
         for package in ("native","perception"):
             installed=base/package
             expected=REPO/"packages"/("lucid-"+package)
-            assert json.loads((installed/"package.json").read_text())["version"]==VERSION
+            assert json.loads((installed/"package.json").read_text())["version"]==VERSION, (name, package, (installed/"package.json").read_text())
             assert (base/"server/node_modules/@lucid-memory"/package).resolve()==installed.resolve()
             for asset in expected.glob("*.node"): assert digest(asset)==digest(installed/asset.name)
         settings=json.loads((base.parent/".claude/settings.json").read_text())
